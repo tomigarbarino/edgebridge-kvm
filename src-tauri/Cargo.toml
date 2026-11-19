@@ -1,6 +1,6 @@
 [package]
 name = "edgebridge-kvm"
-version = "0.3.0"
+version = "0.3.1"
 description = "Share a keyboard and mouse between two Windows PCs."
 edition = "2024"
 license = "MIT"

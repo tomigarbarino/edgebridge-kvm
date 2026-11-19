@@ -1,6 +1,6 @@
 # Windows updates
 
-EdgeBridge v0.2.0 and later check for a newer release on startup. v0.3.0 also checks every six hours while open. They download the installer from GitHub Releases and verify the bundled public key's signature and the signed version before showing **Install update**. An active sender or receiver session must stop before installation. Each PC updates independently.
+EdgeBridge v0.2.0 and later check for a newer release on startup. v0.3.0 also checks every six hours while open. They download the installer from GitHub Releases and verify the bundled public key's signature and the signed version before showing **Install update**. An active sender or receiver session must stop before installation. Each PC updates independently. On Windows, the updater installer waits briefly for the old process before performing the normal application and file-lock checks.
 
 To migrate from v0.1.0, close EdgeBridge and run the v0.2.0 setup for the current Windows user on both PCs. Use the existing installation directory. After an app restart, a secondary PC generates a new pairing code when the receiver starts. The installer preserves edge preferences.
 
