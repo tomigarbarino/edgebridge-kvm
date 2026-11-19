@@ -20,6 +20,8 @@ Move the cursor to the **left edge of the primary PC**. It enters near the right
 
 The v0.1 installer is unsigned. Check its SHA-256 against the published release checksum if you download a copy from somewhere other than the release page. WebView2 may require a one-time download during installation if it is missing.
 
+EdgeBridge v0.2.0 and later check GitHub Releases for signed updates on startup. Upgrading from v0.1.0 requires running the new installer once on each PC. [Windows updates](docs/updates.md)
+
 ## Features and current limits
 
 - Mouse movement, five mouse buttons, vertical and horizontal wheel input, and keyboard scan codes.

@@ -36,6 +36,7 @@ impl Default for Status {
 #[derive(Default)]
 struct State {
     generation: u64,
+    installing: bool,
     task: Option<tauri::async_runtime::JoinHandle<()>>,
     status: Status,
 }
@@ -60,6 +61,9 @@ impl Shared {
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         let mut state = self.0.lock().unwrap();
+        if state.installing {
+            return Err("An update is being installed.".into());
+        }
         if state.status.role.is_some() || state.status.phase == "stopping" {
             return Err("Stop the current session first.".into());
         }
@@ -85,6 +89,18 @@ impl Shared {
         Ok(())
     }
 
+    pub fn reserve_install(&self) -> Result<InstallGuard<'_>, String> {
+        let mut state = self.0.lock().unwrap();
+        if state.status.role.is_some() || state.status.phase == "stopping" {
+            return Err("Stop the current session before installing an update.".into());
+        }
+        if state.installing {
+            return Err("An update is already being installed.".into());
+        }
+        state.installing = true;
+        Ok(InstallGuard { shared: self })
+    }
+
     pub async fn stop(&self) {
         let _stop = self.1.lock().await;
         let (generation, task) = {
@@ -98,6 +114,16 @@ impl Shared {
             let _ = task.await;
         }
         self.update(generation, |status| *status = Status::default());
+    }
+}
+
+pub struct InstallGuard<'a> {
+    shared: &'a Shared,
+}
+
+impl Drop for InstallGuard<'_> {
+    fn drop(&mut self) {
+        self.shared.0.lock().unwrap().installing = false;
     }
 }
 
@@ -141,4 +167,23 @@ pub fn connect(
 #[tauri::command]
 pub async fn discover() -> Result<Vec<String>, String> {
     discovery::scan().await.map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_guard_excludes_sessions_and_other_installs() {
+        let shared = Arc::new(Shared::default());
+        {
+            let _install = shared.reserve_install().expect("idle app can update");
+            assert!(shared.reserve_install().is_err());
+            assert!(shared.launch("primary", |_, _| async { Ok(()) }).is_err());
+        }
+        shared.0.lock().unwrap().status.role = Some("primary");
+        assert!(shared.reserve_install().is_err());
+        shared.0.lock().unwrap().status = Status::default();
+        assert!(shared.reserve_install().is_ok());
+    }
 }

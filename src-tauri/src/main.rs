@@ -14,6 +14,8 @@ mod service;
 #[cfg(windows)]
 mod session_health;
 mod state;
+#[cfg(windows)]
+mod updates;
 
 #[cfg(windows)]
 fn main() {
@@ -22,13 +24,17 @@ fn main() {
 
     native::configure_dpi();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default())
         .manage(Arc::new(service::Shared::default()))
         .invoke_handler(tauri::generate_handler![
             service::status,
             service::stop,
             service::listen,
             service::connect,
-            service::discover
+            service::discover,
+            updates::check_update,
+            updates::install_update
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

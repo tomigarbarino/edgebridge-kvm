@@ -72,10 +72,14 @@ function App() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [update, setUpdate] = useState<string | null>(null);
+  const [updateMessage, setUpdateMessage] = useState('');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const hasStatus = status !== null;
   const running = !!status?.role;
   const selected = status?.role ?? role;
-  const disabled = running || busy;
+  const disabled = running || busy || installing;
 
   useEffect(() => {
     let alive = true;
@@ -119,6 +123,34 @@ function App() {
     void detect();
     return () => { active = false; clearTimeout(timer); };
   }, [hasStatus, running, selected]);
+
+  async function checkUpdates(manual: boolean) {
+    setCheckingUpdate(true);
+    setUpdateMessage('');
+    try {
+      const version = await invoke<string | null>('check_update');
+      setUpdate(version);
+      if (manual && !version) setUpdateMessage('EdgeBridge is up to date.');
+    } catch {
+      if (manual) setUpdateMessage('Could not check for updates. Try again later.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  useEffect(() => { void checkUpdates(false); }, []);
+
+  async function installUpdate() {
+    if (!update) return;
+    setInstalling(true);
+    setUpdateMessage('');
+    try {
+      await invoke('install_update', { version: update });
+    } catch (err) {
+      setUpdateMessage(String(err));
+      setInstalling(false);
+    }
+  }
 
   async function action(command: string, args?: Record<string, string>) {
     setError('');
@@ -223,6 +255,19 @@ function App() {
       <div><span className="metric">Peer</span><strong>{status?.peer ?? '—'}</strong></div>
       <div><span className="metric">LAN round trip</span><strong>{status?.latency_ms == null ? '—' : status.latency_ms + ' ms'}</strong></div>
     </section>}
+    <section className="mt-5 flex flex-wrap items-center gap-3" aria-label="Software updates">
+      {update ? <>
+        <button type="button" className="secondary" disabled={!hasStatus || disabled}
+          onClick={() => void installUpdate()}>
+          {installing ? 'Installing…' : `Install update ${update}`}
+        </button>
+        {running && <span className="hint">Stop the session to install.</span>}
+      </> : <button type="button" className="secondary" disabled={checkingUpdate}
+        onClick={() => void checkUpdates(true)}>
+        {checkingUpdate ? 'Checking for updates…' : 'Check for updates'}
+      </button>}
+      {updateMessage && <span className="hint" role="status">{updateMessage}</span>}
+    </section>
     {(error || status?.message) && <p className="notice" role={error ? 'alert' : 'status'}>{error || status?.message}</p>}
   </main>;
 }
