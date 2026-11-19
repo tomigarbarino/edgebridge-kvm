@@ -1,0 +1,43 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Frontend checks and build
+        run: |
+          npm ci
+          npm run build
+      - name: Formatting, lint and tests
+        working-directory: src-tauri
+        run: |
+          cargo +stable fmt --check
+          cargo +stable clippy --locked --all-targets -- -D warnings
+          cargo +stable test --locked
+      - name: Build the Windows installer
+        run: npm.cmd run tauri build -- --bundles nsis --ci -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edgebridge-windows-x64
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error

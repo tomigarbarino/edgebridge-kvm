@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EdgeBridge KVM",
+  "version": "0.1.0",
+  "identifier": "org.edgebridge.kvm",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "EdgeBridge KVM", "width": 760, "height": 750, "minWidth": 380, "minHeight": 540 }],
+    "security": { "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:", "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'; img-src 'self' data:" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "licenseFile": "../LICENSE",
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
+}
