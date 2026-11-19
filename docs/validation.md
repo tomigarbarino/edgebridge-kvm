@@ -29,6 +29,7 @@ Use two Windows PCs on the same private Wi-Fi. Put the primary PC on the right, 
 | Restore Wi-Fi without restarting either app | The primary retries and reconnects to the same address. It waits for a new edge crossing before forwarding input. |
 | Close an app window while forwarding | The session closes and orderly cleanup releases held remote input. |
 | Open UAC on the secondary or target an elevated app | EdgeBridge respects Windows restrictions and resumes ordinary operation after reconnecting. |
+| Pair a v0.1.0 node with the post-MVP candidate, then reverse roles | Both roles accept the original invitation and preserve edge, Ping/Pong and release behavior. |
 | Run a high polling-rate mouse and log a typing session | Verify smooth pointer movement and responsive typing without missed releases or unexpected local clicks. Record the two PCs’ RTT and polling rates. |
 
 Record observations for Raw Input capture, Windows hook suppression, SendInput delivery, firewall scope, and recovery on both PCs. A successful build does not exercise those behaviors.
