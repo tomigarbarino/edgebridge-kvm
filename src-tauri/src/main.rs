@@ -11,6 +11,8 @@ mod protocol;
 mod receiver;
 #[cfg(windows)]
 mod service;
+#[cfg(windows)]
+mod session_health;
 mod state;
 
 #[cfg(windows)]

@@ -52,4 +52,6 @@ The Tauri commands in `service.rs` own a single session and expose status to the
 
 The Windows CI workflow checks TypeScript, builds the UI, runs Rust format and lint checks, tests protocol and control logic, and builds the NSIS installer. See [Validation](docs/validation.md) for automated coverage and the two-computer test procedure.
 
+See the [architecture](docs/architecture.md), [benchmark](docs/benchmark.md), [open-source comparison](docs/open-source-comparison.md), [threat model](docs/security/threat-model.md), and [V2 readiness plan](docs/v2-readiness.md).
+
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). EdgeBridge KVM is released under the [MIT License](LICENSE).
