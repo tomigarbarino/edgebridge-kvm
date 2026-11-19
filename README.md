@@ -22,6 +22,12 @@ The v0.1 installer is unsigned. Check its SHA-256 against the published release 
 
 EdgeBridge v0.2.0 and later check GitHub Releases for signed updates on startup. Upgrading from v0.1.0 requires running the new installer once on each PC. [Windows updates](docs/updates.md)
 
+## Share clipboard
+
+With v0.3.0 on both PCs, turn on **Share clipboard on both PCs** before starting the receiver and connecting. Copy with Ctrl+C, switch PCs, then paste with Ctrl+V. The option applies only to the current EdgeBridge session and starts off by default.
+
+Clipboard sharing sends Unicode text, compatible Windows bitmap images and up to 32 regular files copied from a local drive. Each transfer can be up to 64 MiB. Folders, cloud placeholders and network paths are outside this version. Paste files before disconnecting. The receiving PC makes a temporary copy so Explorer can paste it into the chosen destination.
+
 ## Features and current limits
 
 - Mouse movement, five mouse buttons, vertical and horizontal wheel input, and keyboard scan codes.

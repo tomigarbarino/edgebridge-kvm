@@ -30,6 +30,8 @@ Use two Windows PCs on the same private Wi-Fi. Put the primary PC on the right, 
 | Close an app window while forwarding | The session closes and orderly cleanup releases held remote input. |
 | Open UAC on the secondary or target an elevated app | EdgeBridge respects Windows restrictions and resumes ordinary operation after reconnecting. |
 | Pair a v0.1.0 node with the post-MVP candidate, then reverse roles | Both roles accept the original invitation and preserve edge, Ping/Pong and release behavior. |
+| Share a text sample, bitmap screenshot and regular file with clipboard sharing enabled on both PCs | The copied item can be pasted in both directions. Mouse and key events remain responsive while the independent channel transfers the file. |
+| Disable clipboard sharing on either peer | Keyboard and mouse still connect. Clipboard items remain local. |
 | Run a high polling-rate mouse and log a typing session | Verify smooth pointer movement and responsive typing without missed releases or unexpected local clicks. Record the two PCs’ RTT and polling rates. |
 
 Record observations for Raw Input capture, Windows hook suppression, SendInput delivery, firewall scope, and recovery on both PCs. A successful build does not exercise those behaviors.

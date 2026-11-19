@@ -15,6 +15,7 @@ type Status = {
   peer: string | null;
   latency_ms: number | null;
   forwarding: boolean;
+  clipboard_active: boolean;
   message: string | null;
 };
 
@@ -62,6 +63,7 @@ function EdgeField({ label, value, change, disabled }: {
 
 function App() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [shareClipboard, setShareClipboard] = useState(false);
   const [role, setRole] = useState<Role>('primary');
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
@@ -138,7 +140,11 @@ function App() {
     }
   }
 
-  useEffect(() => { void checkUpdates(false); }, []);
+  useEffect(() => {
+    void checkUpdates(false);
+    const timer = setInterval(() => void checkUpdates(false), 6 * 60 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   async function installUpdate() {
     if (!update) return;
@@ -152,7 +158,7 @@ function App() {
     }
   }
 
-  async function action(command: string, args?: Record<string, string>) {
+  async function action(command: string, args?: Record<string, string | boolean>) {
     setError('');
     setBusy(true);
     try {
@@ -183,7 +189,7 @@ function App() {
 
   function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void action('connect', { address, code, from, to });
+    void action('connect', { address, code, from, to, shareClipboard });
   }
 
   return <main className="mx-auto max-w-2xl px-5 py-8 sm:px-9 sm:py-10">
@@ -202,6 +208,11 @@ function App() {
       <button type="button" disabled={disabled} aria-pressed={selected === 'secondary'} onClick={() => setRole('secondary')}>Secondary PC</button>
     </div>
 
+    <label className="mb-4 flex items-center gap-2 text-sm">
+      <input type="checkbox" className="clipboard-toggle" checked={shareClipboard} disabled={disabled}
+        onChange={(event) => setShareClipboard(event.target.checked)} />
+      Share clipboard on both PCs
+    </label>
     {selected === 'primary' ? <form className="panel" onSubmit={connect}>
       <h2>Connect to the secondary PC</h2>
       <p className="description">Pair this computer to share its mouse and keyboard.</p>
@@ -245,7 +256,7 @@ function App() {
       <div className="actions">
         {running
           ? <button className="secondary" type="button" disabled={busy} onClick={() => void action('stop')}>Stop receiver</button>
-          : <button className="primary" type="button" disabled={busy} onClick={() => void action('listen')}>Start receiver</button>}
+          : <button className="primary" type="button" disabled={busy} onClick={() => void action('listen', { shareClipboard })}>Start receiver</button>}
       </div>
     </section>}
 
@@ -255,6 +266,9 @@ function App() {
       <div><span className="metric">Peer</span><strong>{status?.peer ?? '—'}</strong></div>
       <div><span className="metric">LAN round trip</span><strong>{status?.latency_ms == null ? '—' : status.latency_ms + ' ms'}</strong></div>
     </section>}
+    {running && shareClipboard && status?.phase === 'connected' && <p className="hint" role="status">
+      {status.clipboard_active ? 'Clipboard sharing active' : 'Clipboard sharing unavailable on this connection'}
+    </p>}
     <section className="mt-5 flex flex-wrap items-center gap-3" aria-label="Software updates">
       {update ? <>
         <button type="button" className="secondary" disabled={!hasStatus || disabled}

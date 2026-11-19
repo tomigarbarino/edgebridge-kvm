@@ -13,7 +13,7 @@ The LAN is untrusted. Discovery responses provide only candidates. TLS 1.3 uses 
 | Delayed negotiations | Eight pending accepts with a three-second limit each. Other pending negotiations are cancelled when one peer wins. | A busy LAN can exhaust the finite slots or bandwidth. Restrict incoming ports to private networks. |
 | Stuck input or stale connection | One matching probe renews the sender lease. Bounded writes, bounded queue age and a receiver key/button ledger fail toward local control. | Data already in TCP can arrive late. Forced termination on the receiver or a switch to a secure desktop can prevent release injection. Physical tests are required. |
 | Untrusted renderer or future local extensions | Tauri capabilities grant only the five commands to the local `main` WebView. Production content is packaged locally and constrained by CSP. | Script execution inside the trusted main WebView would inherit its privileges. Future remote content needs separate windows and capabilities. |
-| Scope creep around privacy | Input-only protocol, transient credentials, no screen capture or telemetry. No persistent credential store. | OS and authorized endpoint apps may observe normal input. A compromised host or privileged Windows process sits outside the protection of the bridge. |
+| Scope creep around privacy | Transient credentials, opt-in clipboard on both PCs, and a separate pinned TLS clipboard channel with a session key and transfer limits. Input events use the original channel. | OS and authorized endpoint apps may observe normal input. A compromised host or privileged Windows process sits outside the protection of the bridge. |
 
 ## Assumptions and validation
 

@@ -15,6 +15,7 @@ pub struct Status {
     pub peer: Option<String>,
     pub latency_ms: Option<u32>,
     pub forwarding: bool,
+    pub clipboard_active: bool,
     pub message: Option<String>,
 }
 
@@ -28,6 +29,7 @@ impl Default for Status {
             peer: None,
             latency_ms: None,
             forwarding: false,
+            clipboard_active: false,
             message: None,
         }
     }
@@ -139,8 +141,12 @@ pub async fn stop(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn listen(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
-    shared.inner().launch("secondary", network::listen)
+pub fn listen(shared: tauri::State<'_, Arc<Shared>>, share_clipboard: bool) -> Result<(), String> {
+    shared
+        .inner()
+        .launch("secondary", move |shared, generation| {
+            network::listen(shared, generation, share_clipboard)
+        })
 }
 
 #[tauri::command]
@@ -150,6 +156,7 @@ pub fn connect(
     code: String,
     from: Edge,
     to: Edge,
+    share_clipboard: bool,
 ) -> Result<(), String> {
     let ip: Ipv4Addr = address
         .trim()
@@ -160,7 +167,7 @@ pub fn connect(
     }
     let invite = Invite::parse(&code).map_err(|_| "The pairing code is invalid.")?;
     shared.inner().launch("primary", move |shared, generation| {
-        network::send(shared, generation, ip, invite, from, to)
+        network::send(shared, generation, ip, invite, (from, to), share_clipboard)
     })
 }
 

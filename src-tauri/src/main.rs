@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
 mod discovery;
 #[cfg(windows)]
 mod native;
