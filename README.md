@@ -24,7 +24,12 @@ EdgeBridge v0.2.0 and later check GitHub Releases for signed updates on startup.
 
 ## Share clipboard
 
-With v0.3.0 on both PCs, turn on **Share clipboard on both PCs** before starting the receiver and connecting. Copy with Ctrl+C, switch PCs, then paste with Ctrl+V. The option applies only to the current EdgeBridge session and starts off by default.
+1. Run EdgeBridge v0.3.0 or later on both PCs. If already connected, select **Disconnect** on the primary PC and **Stop receiver** on the secondary PC.
+2. Turn on **Share clipboard on both PCs** on each PC. The checkbox starts unchecked when the app opens and is locked while the sender or receiver is running.
+3. On the secondary PC, select **Start receiver**. Use its new pairing code to reconnect from the primary PC.
+4. Confirm that EdgeBridge shows **Clipboard sharing active**. Copy fresh text with Ctrl+C, switch PCs, then paste into Notepad with Ctrl+V.
+
+**Connected** confirms the mouse and keyboard session. If **Clipboard sharing active** is missing or EdgeBridge says **Clipboard sharing unavailable on this connection**, check the version and checkbox on both PCs, then restart the receiver and reconnect. Copy again after sharing becomes active to send the new clipboard contents.
 
 Clipboard sharing sends Unicode text, compatible Windows bitmap images and up to 32 regular files copied from a local drive. Each transfer can be up to 64 MiB. Folders, cloud placeholders and network paths are outside this version. Paste files before disconnecting. The receiving PC makes a temporary copy so Explorer can paste it into the chosen destination.
 

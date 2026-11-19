@@ -16,9 +16,10 @@ flowchart LR
 
 | Boundary | Owner | Properties |
 | --- | --- | --- |
-| UI and local permissions | `src/main.tsx`, `capabilities/main.json`, `service.rs` | Five commands scoped to the local main WebView. Rust validates inputs and serializes service ownership. The UI polls a snapshot every 250 ms. Only edge selections are persisted. |
+| UI and local permissions | `src/main.tsx`, `capabilities/main.json`, `service.rs` | Commands are scoped to the local main WebView. Rust validates inputs and serializes service ownership. The UI polls a snapshot every 250 ms. Only edge selections are persisted. |
 | Pairing and discovery | `pairing.rs`, `discovery.rs` | Optional UDP address discovery. A session invitation carries the server certificate pin and a 256-bit token. The sender verifies the certificate and TLS signature before sending the token. |
 | Transport and lifecycle | `network.rs`, `session_health.rs`, `protocol.rs` | Fixed-size v1 frames, TCP_NODELAY, bounded TLS writes and one authenticated controller. Eight pending negotiations are allowed, each with a three-second limit. Only the selected controller receives Ready. |
+| Clipboard sharing | `network.rs`, `clipboard.rs` | Both peers opt in before connecting. TLS ALPN negotiates support, then a separate TLS stream on the receiver's TCP port is authenticated with a fresh token sent over the control connection. Clipboard transfers run alongside the input stream. The UI reports clipboard availability separately from control connectivity. |
 | Capture and control | `native/capture.rs`, `state.rs` | Dedicated Win32 message thread. Low-level hooks handle keyboard, buttons and suppression. Raw Input supplies relative mouse counts when forwarding. The normalized edge coordinate is independent of the peer's resolution. |
 | Emulation | `receiver.rs`, `native/injection.rs` | The receiver owns the active edge and pressed-input ledger. SetCursorPos places the pointer and SendInput delivers buttons, wheels and scan codes. The ledger releases held input on return, orderly stop or session teardown. |
 

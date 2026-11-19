@@ -1,8 +1,8 @@
 # Windows updates
 
-EdgeBridge v0.2.0 and later check for a newer release on startup. v0.3.0 also checks every six hours while open. They download the installer from GitHub Releases and verify the bundled public key's signature and the signed version before showing **Install update**. An active sender or receiver session must stop before installation. Each PC updates independently. On Windows, the updater installer waits briefly for the old process before performing the normal application and file-lock checks.
+EdgeBridge v0.2.0 and later check for a newer release on startup. v0.3.0 and later also check every six hours while open. EdgeBridge downloads the installer from GitHub Releases and verifies the signature against its bundled public key, including the signed version, before showing **Install update**. An active sender or receiver session must stop before installation. Each PC updates independently. On Windows, the updater installer waits briefly for the old process before performing the normal application and file-lock checks.
 
-To migrate from v0.1.0, close EdgeBridge and run the v0.2.0 setup for the current Windows user on both PCs. Use the existing installation directory. After an app restart, a secondary PC generates a new pairing code when the receiver starts. The installer preserves edge preferences.
+To migrate from v0.1.0, or if **Install update** aborts, close EdgeBridge and download the current x64 setup and `SHA256SUMS.txt` from [GitHub Releases](../../../releases/latest). Compare the installer's SHA-256 with the published value before running it for the current Windows user. Use the existing installation directory. The installer preserves edge preferences. Start the receiver again to get a new pairing code. To use the shared clipboard, enable it on both PCs [before reconnecting](../README.md#share-clipboard).
 
 ## Publish a Windows update
 
