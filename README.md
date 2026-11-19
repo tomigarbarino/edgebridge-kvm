@@ -22,6 +22,35 @@ The v0.1 installer is unsigned. Check its SHA-256 against the published release 
 
 EdgeBridge v0.2.0 and later check GitHub Releases for signed updates on startup. Upgrading from v0.1.0 requires running the new installer once on each PC. [Windows updates](docs/updates.md)
 
+### Quick install with an AI assistant
+
+Paste this prompt into the assistant on each PC. Start with the secondary PC.
+
+```text
+Help me install or update EdgeBridge KVM on this Windows 11 x64 PC.
+This PC is [secondary / primary]. I want clipboard sharing [on / off].
+Ask me which option applies if I leave either choice open.
+
+1. Use the latest stable release from
+   https://github.com/tomigarbarino/edgebridge-kvm/releases/latest.
+   Check the installed version. If it needs installing or updating, download
+   the x64 setup and SHA256SUMS.txt and verify the setup with Get-FileHash
+   -Algorithm SHA256. If the checksum matches, close EdgeBridge and run the
+   setup. If a session is active, let me know before disconnecting it.
+2. Open EdgeBridge and verify the installed version. If I want clipboard
+   sharing, enable Share clipboard on both PCs on each computer before
+   starting the receiver or connecting.
+3. On the secondary PC, select Secondary PC and Start receiver.
+   On the primary PC, select Primary PC, find the secondary on Wi-Fi,
+   and let me enter the pairing code directly in the app.
+4. Confirm Connected on both PCs. If sharing is enabled, confirm
+   Clipboard sharing active and test with fresh text between two Notepad windows.
+
+If you can operate only one PC, set up that PC and tell me where to continue
+on the other. If you cannot run commands or use the desktop, guide me through
+the steps. Tell me which checks actually passed.
+```
+
 ## Share clipboard
 
 1. Run EdgeBridge v0.3.0 or later on both PCs. If already connected, select **Disconnect** on the primary PC and **Stop receiver** on the secondary PC.
