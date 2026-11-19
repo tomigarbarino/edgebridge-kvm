@@ -27,12 +27,15 @@ jobs:
       - name: Frontend checks and build
         run: |
           npm ci
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run build
       - name: Formatting, lint and tests
         working-directory: src-tauri
         run: |
           cargo +stable fmt --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo +stable clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo +stable test --locked
       - name: Build the Windows installer
         run: npm.cmd run tauri build -- --bundles nsis --ci -- --locked
