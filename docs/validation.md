@@ -8,7 +8,9 @@
 - Control tests cover offline behavior, held-input guards, return and disconnect.
 - A simulated receiving desktop verifies entry and return, prevents a bounce from entry momentum, and checks that teardown releases keys and mouse buttons.
 
-These tests use a simulated input sink or localhost network traffic. The cases below require two physical PCs.
+A single-PC Windows smoke test also opened the built WebView2 app, checked the default edge selection, started the receiver through the UI, and verified that Stop closed the TCP listener.
+
+The automated Rust tests use a simulated input sink or localhost network traffic. The cases below require two physical PCs.
 
 ## Two-PC test matrix
 

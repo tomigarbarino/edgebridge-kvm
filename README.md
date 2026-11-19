@@ -8,6 +8,8 @@ EdgeBridge shares one mouse and keyboard between two Windows computers on the sa
 
 Move the cursor to the **left edge of the primary PC**. It enters near the right edge of the secondary PC. Move into the secondary display first, then push against its **right edge** to return. Press **Ctrl + Alt + F12** on the primary keyboard to return immediately.
 
+![EdgeBridge KVM primary setup showing the default left and right edges](docs/screenshots/primary.png)
+
 ## Install and pair
 
 1. On each PC, run the x64 setup executable from [Releases](../../releases). Use Windows 11 x64 with Microsoft Edge WebView2 and a mouse that reports relative movement. Keep the app open on both PCs.
