@@ -1,11 +1,16 @@
-use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use rustls::pki_types::ServerName;
 use tokio::{
     io::{AsyncRead, AsyncWrite, split},
     net::{TcpListener, TcpStream},
-    time::{Instant, MissedTickBehavior, interval, sleep, timeout},
+    task::JoinSet,
+    time::{MissedTickBehavior, interval, sleep, timeout},
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -16,11 +21,12 @@ use crate::{
     protocol::{Edge, Frame, TCP_PORT, Token},
     receiver::{Desktop, Receiver},
     service::Shared,
+    session_health::{DEADLINE, Heartbeat, QueuedFrame},
 };
 
 const HANDSHAKE: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_millis(250);
-const DEADLINE: Duration = Duration::from_millis(1_250);
+const MAX_HANDSHAKES: usize = 8;
 
 pub async fn listen(shared: Arc<Shared>, generation: u64) -> Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, TCP_PORT))
@@ -41,24 +47,21 @@ pub async fn listen(shared: Arc<Shared>, generation: u64) -> Result<()> {
 
     let connections = async {
         loop {
-            let (stream, address) = listener.accept().await?;
-            let wire = timeout(HANDSHAKE, authorize(stream, &acceptor, token)).await;
-            if let Ok(Ok(wire)) = wire {
-                shared.update(generation, |status| {
-                    status.phase = "connected";
-                    status.peer = Some(address.ip().to_string());
-                });
-                let result = receive(wire, WindowsDesktop, |active| {
-                    shared.update(generation, |status| status.forwarding = active);
-                })
-                .await;
-                shared.update(generation, |status| {
-                    status.phase = "waiting";
-                    status.peer = None;
-                    status.forwarding = false;
-                    status.message = result.err().map(|err| err.to_string());
-                });
-            }
+            let (wire, address) = accept_peer(&listener, &acceptor, token).await?;
+            shared.update(generation, |status| {
+                status.phase = "connected";
+                status.peer = Some(address.ip().to_string());
+            });
+            let result = receive(wire, WindowsDesktop, |active| {
+                shared.update(generation, |status| status.forwarding = active);
+            })
+            .await;
+            shared.update(generation, |status| {
+                status.phase = "waiting";
+                status.peer = None;
+                status.forwarding = false;
+                status.message = result.err().map(|err| err.to_string());
+            });
         }
     };
 
@@ -78,11 +81,39 @@ pub async fn listen(shared: Arc<Shared>, generation: u64) -> Result<()> {
     }
 }
 
-async fn authorize(
-    stream: TcpStream,
+type PeerStream = tokio_rustls::server::TlsStream<TcpStream>;
+
+async fn accept_peer(
+    listener: &TcpListener,
     acceptor: &TlsAcceptor,
     token: Token,
-) -> Result<tokio_rustls::server::TlsStream<TcpStream>> {
+) -> Result<(PeerStream, SocketAddr)> {
+    let mut handshakes = JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            Some(result) = handshakes.join_next() => {
+                if let Ok(Some((mut wire, address))) = result
+                    && matches!(timeout(HEARTBEAT, Frame::Ready.send(&mut wire)).await, Ok(Ok(())))
+                {
+                    // Dropping the set cancels every other pending handshake. Only this peer gets Ready.
+                    return Ok((wire, address));
+                }
+            }
+            accepted = listener.accept(), if handshakes.len() < MAX_HANDSHAKES => {
+                let (stream, address) = accepted?;
+                let acceptor = acceptor.clone();
+                handshakes.spawn(async move {
+                    let wire = timeout(HANDSHAKE, authorize(stream, &acceptor, token))
+                        .await.ok()?.ok()?;
+                    Some((wire, address))
+                });
+            }
+        }
+    }
+}
+
+async fn authorize(stream: TcpStream, acceptor: &TlsAcceptor, token: Token) -> Result<PeerStream> {
     stream.set_nodelay(true)?;
     let mut stream = acceptor.accept(stream).await?;
     ensure!(
@@ -90,7 +121,6 @@ async fn authorize(
         if pairing::authenticate(candidate, token)),
         "Pairing denied"
     );
-    Frame::Ready.send(&mut stream).await?;
     Ok(stream)
 }
 
@@ -126,11 +156,11 @@ async fn receive(
 }
 
 async fn connect(
-    ip: Ipv4Addr,
+    address: SocketAddr,
     invite: Invite,
     connector: &TlsConnector,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
-    let stream = TcpStream::connect((ip, TCP_PORT))
+    let stream = TcpStream::connect(address)
         .await
         .context("Receiver unreachable")?;
     stream.set_nodelay(true)?;
@@ -158,7 +188,12 @@ pub async fn send(
 ) -> Result<()> {
     let connector = TlsConnector::from(Arc::new(invite.client()?));
     loop {
-        let result = match timeout(HANDSHAKE, connect(ip, invite, &connector)).await {
+        let result = match timeout(
+            HANDSHAKE,
+            connect((ip, TCP_PORT).into(), invite, &connector),
+        )
+        .await
+        {
             Ok(Ok(wire)) => {
                 let (capture, events) = Capture::start(from, to).await?;
                 shared.update(generation, |status| {
@@ -187,22 +222,21 @@ pub async fn send(
 async fn drive(
     wire: impl AsyncRead + AsyncWrite + Unpin,
     capture: &Capture,
-    mut events: tokio::sync::mpsc::Receiver<Frame>,
+    mut events: tokio::sync::mpsc::Receiver<QueuedFrame>,
     shared: &Shared,
     generation: u64,
 ) -> Result<()> {
     let (mut read, mut write) = split(wire);
-    let last_pong = std::sync::Mutex::new(Instant::now());
-    let start = Instant::now();
+    let heartbeat = Mutex::new(Heartbeat::new(Instant::now()));
     let receiving = async {
         loop {
             match Frame::read(&mut read).await? {
                 Frame::Return(along) => capture.return_to(along),
                 Frame::Pong(id) => {
-                    let now = Instant::now();
-                    *last_pong.lock().unwrap() = now;
-                    let latency = (now.duration_since(start).as_millis() as u32).wrapping_sub(id);
-                    shared.update(generation, |status| status.latency_ms = Some(latency));
+                    let latency = heartbeat.lock().unwrap().acknowledge(id, Instant::now());
+                    if let Some(latency) = latency {
+                        shared.update(generation, |status| status.latency_ms = Some(latency));
+                    }
                 }
                 _ => bail!("Unexpected receiver frame"),
             }
@@ -215,11 +249,12 @@ async fn drive(
             let frame = tokio::select! {
                 biased;
                 _ = ticker.tick() => {
-                    ensure!(last_pong.lock().unwrap().elapsed() < DEADLINE, "Receiver timed out");
+                    let probe = heartbeat.lock().unwrap().probe(Instant::now())?;
                     shared.update(generation, |status| status.forwarding = capture.forwarding());
-                    Frame::Ping(start.elapsed().as_millis() as u32)
+                    let Some(probe) = probe else { continue };
+                    probe
                 }
-                frame = events.recv() => frame.context("Input capture stopped")?,
+                event = events.recv() => event.context("Input capture stopped")?.fresh(Instant::now())?,
             };
             ensure!(capture.alive(), "Input capture stopped");
             timeout(HEARTBEAT, frame.send(&mut write))
@@ -230,6 +265,10 @@ async fn drive(
     let ((), ()) = tokio::try_join!(receiving, sending)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "benchmark.rs"]
+mod benchmark;
 
 #[cfg(test)]
 mod tests {
@@ -247,7 +286,11 @@ mod tests {
         let server = async {
             for expected in [true, true, false, false] {
                 let (stream, _) = listener.accept().await?;
-                assert_eq!(authorize(stream, &acceptor, token).await.is_ok(), expected);
+                let result = authorize(stream, &acceptor, token).await;
+                assert_eq!(result.is_ok(), expected);
+                if let Ok(mut wire) = result {
+                    Frame::Ready.send(&mut wire).await?;
+                }
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -279,6 +322,67 @@ mod tests {
             tokio::try_join!(server, client)
         })
         .await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn accepts_an_authorized_peer_while_one_negotiation_is_pending() -> Result<()> {
+        let (config, code, token) = pairing::create()?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let connector = TlsConnector::from(Arc::new(Invite::parse(&code)?.client()?));
+        let pending = TcpStream::connect(address).await?;
+        let server = accept_peer(&listener, &acceptor, token);
+        let client = connect(address, Invite::parse(&code)?, &connector);
+        let ((_, peer), connected_tls) = timeout(Duration::from_secs(2), async {
+            tokio::try_join!(server, client)
+        })
+        .await??;
+        assert_eq!(peer, connected_tls.get_ref().0.local_addr()?);
+        assert_ne!(peer, pending.local_addr()?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn receiver_cleans_held_input_when_the_stream_ends() -> Result<()> {
+        use crate::protocol::Input;
+        use crate::state::{Point, Screen};
+        struct NoWindowsInput(Mutex<Vec<Input>>);
+        impl Desktop for &NoWindowsInput {
+            fn screen(&self) -> Screen {
+                Screen {
+                    width: 1024,
+                    height: 768,
+                }
+            }
+            fn move_to(&self, _: Point) -> Result<()> {
+                Ok(())
+            }
+            fn input(&self, event: Input) -> Result<()> {
+                self.0.lock().unwrap().push(event);
+                Ok(())
+            }
+        }
+        let (mut tx, rx) = tokio::io::duplex(128);
+        let fake = NoWindowsInput(Mutex::new(Vec::new()));
+        let client = async move {
+            Frame::Enter(Edge::Right, 30_000).send(&mut tx).await?;
+            Frame::Input(Input::Button(0, true)).send(&mut tx).await?;
+            Frame::Ping(11).send(&mut tx).await?;
+            assert_eq!(Frame::read(&mut tx).await?, Frame::Pong(11));
+            Ok::<_, anyhow::Error>(())
+        };
+        let (client, server) = timeout(Duration::from_secs(2), async {
+            tokio::join!(client, receive(rx, &fake, |_| {}))
+        })
+        .await?;
+        client?;
+        assert!(server.is_err());
+        assert_eq!(
+            *fake.0.lock().unwrap(),
+            [Input::Button(0, true), Input::Button(0, false)]
+        );
         Ok(())
     }
 }

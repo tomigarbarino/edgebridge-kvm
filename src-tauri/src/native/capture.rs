@@ -34,6 +34,7 @@ use super::WindowsDesktop;
 use crate::{
     protocol::{Edge, Frame, Input, MAX_MOVEMENT},
     receiver::Desktop,
+    session_health::QueuedFrame,
     state::{Control, Point, Screen},
 };
 
@@ -50,13 +51,13 @@ struct Link {
     forwarding: AtomicBool,
     return_at: AtomicU32,
     thread_id: AtomicU32,
-    events: mpsc::Sender<Frame>,
+    events: mpsc::Sender<QueuedFrame>,
 }
 
 pub struct Capture(Arc<Link>, Option<std::thread::JoinHandle<()>>);
 
 impl Capture {
-    pub async fn start(from: Edge, to: Edge) -> Result<(Self, mpsc::Receiver<Frame>)> {
+    pub async fn start(from: Edge, to: Edge) -> Result<(Self, mpsc::Receiver<QueuedFrame>)> {
         let (events, rx) = mpsc::channel(QUEUE_CAPACITY);
         let (ready, initialized) = oneshot::channel();
         let mut capture = Self(
@@ -139,7 +140,12 @@ impl HookState {
     }
 
     fn offer(&mut self, frame: Frame) -> bool {
-        if self.link.events.try_send(frame).is_ok() {
+        if self
+            .link
+            .events
+            .try_send(QueuedFrame::new(frame, Instant::now()))
+            .is_ok()
+        {
             return true;
         }
         self.link.alive.store(false, Relaxed);
