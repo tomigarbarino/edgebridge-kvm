@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{ "label": "main", "title": "EdgeBridge KVM", "width": 760, "height": 750, "minWidth": 380, "minHeight": 540 }],
-    "security": { "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:", "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'; img-src 'self' data:" }
+    "security": { "capabilities": ["main-session"], "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:", "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'; img-src 'self' data:" }
   },
   "bundle": {
     "active": true,
