@@ -1,5 +1,6 @@
 use super::{accept_peer, connect, receive};
 use crate::{
+    layout::Layout,
     pairing::{self, Invite},
     protocol::{Edge, Frame, Input},
     receiver::Desktop,
@@ -14,14 +15,11 @@ use std::{
 use tokio::net::TcpListener;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
-struct SimulatedDesktop;
+struct SimulatedDesktop(Arc<Layout>);
 
 impl Desktop for SimulatedDesktop {
-    fn screen(&self) -> Screen {
-        Screen {
-            width: 1920,
-            height: 1080,
-        }
+    fn layout(&self) -> Arc<Layout> {
+        Arc::clone(&self.0)
     }
     fn move_to(&self, _: Point) -> Result<()> {
         Ok(())
@@ -60,7 +58,11 @@ async fn tls_loopback_profile() -> Result<()> {
 
     let server = async {
         let (wire, _) = accept_peer(&listener, &acceptor, token).await?;
-        receive(wire, SimulatedDesktop, |_| {}).await
+        let layout = Layout::single(Screen {
+            width: 1920,
+            height: 1080,
+        });
+        receive(wire, SimulatedDesktop(Arc::new(layout)), |_| {}).await
     };
     let client = async {
         let started = Instant::now();

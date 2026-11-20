@@ -4,6 +4,7 @@
 mod clipboard;
 #[cfg(windows)]
 mod discovery;
+mod layout;
 #[cfg(windows)]
 mod native;
 #[cfg(windows)]

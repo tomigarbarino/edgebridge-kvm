@@ -1,6 +1,6 @@
 # Architecture
 
-EdgeBridge is a Windows user-session input bridge. The **primary PC is on the right**. Its left edge hands control to the secondary PC's right edge, and that same secondary edge returns control. The settings allow other edges. Each PC uses its Windows primary monitor.
+EdgeBridge is a Windows user-session input bridge. By default, the primary PC is on the right. Its left edge hands control to the secondary PC's right edge, and that same secondary edge returns control. The settings allow other edges. EdgeBridge reads the active monitor rectangles from Windows in physical pixels. The outer edge at the cursor's position depends on which monitors are active.
 
 ```mermaid
 flowchart LR
@@ -22,6 +22,7 @@ flowchart LR
 | Clipboard sharing | `network.rs`, `clipboard.rs` | Both peers opt in before connecting. TLS ALPN negotiates support, then a separate TLS stream on the receiver's TCP port is authenticated with a fresh token sent over the control connection. Clipboard transfers run alongside the input stream. The UI reports clipboard availability separately from control connectivity. |
 | Capture and control | `native/capture.rs`, `state.rs` | Dedicated Win32 message thread. Low-level hooks handle keyboard, buttons and suppression. Raw Input supplies relative mouse counts when forwarding. The normalized edge coordinate is independent of the peer's resolution. |
 | Emulation | `receiver.rs`, `native/injection.rs` | The receiver owns the active edge and pressed-input ledger. SetCursorPos places the pointer and SendInput delivers buttons, wheels and scan codes. The ledger releases held input on return, orderly stop or session teardown. |
+| Monitor layout | `layout.rs`, `native/mod.rs`, `native/capture.rs`, `receiver.rs` | Active monitor rectangles support negative origins and staggered desktops. The Windows adapters cache display enumeration for 250 ms. When an input event detects a changed layout during forwarding, control returns and the receiver releases held input. The next crossing uses the new rectangles. |
 
 ## Session and control transitions
 

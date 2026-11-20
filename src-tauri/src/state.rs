@@ -44,22 +44,6 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn clamp(self, p: Point) -> Point {
-        Point {
-            x: p.x.clamp(0, self.width - 1),
-            y: p.y.clamp(0, self.height - 1),
-        }
-    }
-
-    pub fn at(self, edge: Edge, point: Point) -> bool {
-        match edge {
-            Edge::Left => point.x <= 0,
-            Edge::Right => point.x >= self.width - 1,
-            Edge::Top => point.y <= 0,
-            Edge::Bottom => point.y >= self.height - 1,
-        }
-    }
-
     pub fn outward(edge: Edge, dx: i32, dy: i32) -> bool {
         match edge {
             Edge::Left => dx < 0,
@@ -68,43 +52,12 @@ impl Screen {
             Edge::Bottom => dy > 0,
         }
     }
-
-    pub fn along(self, edge: Edge, p: Point) -> u16 {
-        let (position, length) = match edge {
-            Edge::Left | Edge::Right => (p.y, self.height),
-            Edge::Top | Edge::Bottom => (p.x, self.width),
-        };
-        (i64::from(position.clamp(0, length - 1)) * i64::from(u16::MAX)
-            / i64::from((length - 1).max(1))) as u16
-    }
-
-    pub fn entry(self, edge: Edge, along: u16) -> Point {
-        let map = |extent| (i64::from(along) * i64::from(extent - 1) / i64::from(u16::MAX)) as i32;
-        let point = match edge {
-            Edge::Left => Point {
-                x: 2,
-                y: map(self.height),
-            },
-            Edge::Right => Point {
-                x: self.width - 3,
-                y: map(self.height),
-            },
-            Edge::Top => Point {
-                x: map(self.width),
-                y: 2,
-            },
-            Edge::Bottom => Point {
-                x: map(self.width),
-                y: self.height - 3,
-            },
-        };
-        self.clamp(point)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::Layout;
 
     #[test]
     fn recovers_local_control_and_never_enters_offline_or_with_held_input() {
@@ -124,14 +77,14 @@ mod tests {
 
     #[test]
     fn defaults_cross_left_to_right_and_return_at_scaled_height() {
-        let primary = Screen {
+        let primary = Layout::single(Screen {
             width: 2560,
             height: 1440,
-        };
-        let secondary = Screen {
+        });
+        let secondary = Layout::single(Screen {
             width: 1920,
             height: 1080,
-        };
+        });
         let exit = Point { x: 0, y: 720 };
         assert!(primary.at(Edge::Left, exit));
         assert!(!primary.at(Edge::Right, exit));
@@ -150,14 +103,14 @@ mod tests {
 
     #[test]
     fn vertical_edges_and_corners_map_within_the_display() {
-        let narrow = Screen {
+        let narrow = Layout::single(Screen {
             width: 600,
             height: 1100,
-        };
-        let wide = Screen {
+        });
+        let wide = Layout::single(Screen {
             width: 1900,
             height: 900,
-        };
+        });
         let edge = Edge::Top;
         let p = Point { x: 599, y: 0 };
         assert!(narrow.at(edge, p));

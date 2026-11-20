@@ -22,6 +22,12 @@ If discovery is unavailable or one PC is on an older version, use **Show manual 
 
 To change which mouse and keyboard are shared, use **Make this PC primary** on one PC and **Make this PC secondary** on the other. This ends the active session on each PC. Start the new receiver, check the layout on the new primary, and pair again. Roles and edges are saved locally.
 
+### Move a shared HDMI monitor
+
+In Windows Display settings, use **Extend** and place the monitor on the side where it physically sits. Keep the EdgeBridge position set to where the other PC sits. With v0.4.1 or later on both PCs, EdgeBridge recalculates the crossing edge when Windows detects a screen being attached or removed. If a display change happens while controlling the other PC, move the mouse to return control locally, then cross the new outer edge.
+
+For a left laptop, shared middle monitor and right laptop, set the secondary's position according to the laptops. If the middle monitor is attached to the right laptop, the left crossing starts at the middle monitor's left edge. If it is attached to the left laptop, crossing from the right laptop enters the middle monitor on its right edge. A monitor or HDMI switch that keeps the same displays active in Windows does not report the selected video input to EdgeBridge.
+
 The v0.1 installer is unsigned. Check its SHA-256 against the published release checksum if you download a copy from somewhere other than the release page. WebView2 may require a one-time download during installation if it is missing.
 
 EdgeBridge v0.2.0 and later check GitHub Releases for signed updates on startup. Upgrading from v0.1.0 requires running the new installer once on each PC. [Windows updates](docs/updates.md)
@@ -71,7 +77,7 @@ Clipboard sharing sends Unicode text, compatible Windows bitmap images and up to
 ## Features and current limits
 
 - Mouse movement, five mouse buttons, vertical and horizontal wheel input, and keyboard scan codes.
-- Configurable exit and entry edges on the Windows primary monitor of each computer. Position along the edge is proportional across resolutions and Windows display scale settings. Pointer movement uses relative mouse counts and can feel different from Windows pointer acceleration.
+- Configurable exit and entry edges across each PC's active Windows displays. Crossing uses the outer edge in the selected direction. Position along the edge is proportional across resolutions and Windows display scale settings. Pointer movement uses relative mouse counts and can feel different from Windows pointer acceleration.
 - IPv4 discovery via UDP broadcast with a manual address fallback. Guest Wi-Fi and client isolation can prevent direct connections. The receiver uses TCP port **46387** and UDP port **46388**.
 - In-session reconnection to the configured IPv4 address. TCP failures and heartbeat timeouts restore local input. Automatic reconnection uses the current pairing code until either app is stopped or the receiver is restarted.
 - Transition waits for held keys and mouse buttons to be released. Emergency return and orderly disconnect send releases for remote keys and buttons still held. Dragging across screens is outside this release.

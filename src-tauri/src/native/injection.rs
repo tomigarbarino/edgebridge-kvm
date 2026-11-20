@@ -1,4 +1,4 @@
-use std::{io, mem::size_of};
+use std::{io, mem::size_of, sync::Arc};
 
 use anyhow::{Result, bail};
 use windows_sys::Win32::UI::{
@@ -13,17 +13,13 @@ use windows_sys::Win32::UI::{
     WindowsAndMessaging::SetCursorPos,
 };
 
-use crate::{
-    protocol::Input,
-    receiver::Desktop,
-    state::{Point, Screen},
-};
+use crate::{layout::Layout, protocol::Input, receiver::Desktop, state::Point};
 
 pub struct WindowsDesktop;
 
 impl Desktop for WindowsDesktop {
-    fn screen(&self) -> Screen {
-        super::screen()
+    fn layout(&self) -> Arc<Layout> {
+        super::layout()
     }
 
     fn move_to(&self, point: Point) -> Result<()> {

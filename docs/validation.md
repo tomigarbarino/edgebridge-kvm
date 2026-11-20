@@ -6,6 +6,7 @@
 - A localhost TLS session accepts the invitation, reconnects, rejects a different receiver certificate, and rejects a wrong token under the correct certificate.
 - A localhost discovery test checks both the original address response and the name and fingerprint response. A TLS test compares the two visual codes, verifies that one approval cannot issue a credential, rejects a declined request, and connects with the credential issued after both approve.
 - Geometry tests verify the default primary-left to secondary-right route, the return path, proportional placement, and vertical configurations.
+- Geometry tests cover a middle monitor moving the outer edge, negative origins and staggered monitors. A simulated receiving desktop verifies return and button release after a layout change.
 - Control tests cover offline behavior, held-input guards, return and disconnect.
 - A simulated receiving desktop verifies entry and return, prevents a bounce from entry momentum, and checks that teardown releases keys and mouse buttons.
 
@@ -27,6 +28,7 @@ Use two Windows PCs on the same private Wi-Fi. Put the primary PC on the right, 
 | Type, click, drag within the secondary, scroll, and use keyboard shortcuts | The secondary responds. The primary editor receives no forwarded typing or mouse events. Check both wheel axes and extra mouse buttons if available. |
 | Change resolutions, scaling and edge selections | Try 1920×1080 at 100% and 2560×1440 at 150%. Verify placement at multiple heights. Repeat with top and bottom. |
 | Swap primary and secondary | Change role on both PCs, start the new receiver, choose its physical position on the new primary, and pair again. Only the new primary's peripherals are forwarded. |
+| Move the middle monitor's HDMI cable between PCs while connected | Each Windows desktop shows the expected extended layout. Test moving the cable while control is local and while forwarding. After the next input event, control returns if it was remote. Cross at the new outer edge and confirm the pointer moves across same-PC screens without handing control off at their shared boundary. |
 | Press Ctrl + Alt + F12 during remote control | The primary recovers immediately. The secondary releases any held modifier or mouse button. |
 | Disconnect Wi-Fi or stop the receiver while forwarding | Local input returns when Windows reports the drop or the heartbeat expires, normally within about 1.5 seconds. The receiver releases remote keys and buttons once it observes the failure. |
 | Restore Wi-Fi without restarting either app | The primary retries and reconnects to the same address. It waits for a new edge crossing before forwarding input. |

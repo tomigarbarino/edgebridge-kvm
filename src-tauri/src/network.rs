@@ -635,15 +635,16 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_cleans_held_input_when_the_stream_ends() -> Result<()> {
+        use crate::layout::Layout;
         use crate::protocol::Input;
         use crate::state::{Point, Screen};
         struct NoWindowsInput(Mutex<Vec<Input>>);
         impl Desktop for &NoWindowsInput {
-            fn screen(&self) -> Screen {
-                Screen {
+            fn layout(&self) -> Arc<Layout> {
+                Arc::new(Layout::single(Screen {
                     width: 1024,
                     height: 768,
-                }
+                }))
             }
             fn move_to(&self, _: Point) -> Result<()> {
                 Ok(())

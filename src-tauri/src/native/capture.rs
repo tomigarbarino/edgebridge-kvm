@@ -32,6 +32,7 @@ use windows_sys::{
 
 use super::WindowsDesktop;
 use crate::{
+    layout::Layout,
     protocol::{Edge, Frame, Input, MAX_MOVEMENT},
     receiver::Desktop,
     session_health::QueuedFrame,
@@ -113,6 +114,7 @@ struct HookState {
     to: Edge,
     last_local: Option<Point>,
     last_along: u16,
+    layout: Arc<Layout>,
     cooldown_until: Instant,
     keys: [bool; 512],
     consume_key_up: [bool; 512],
@@ -131,6 +133,7 @@ impl HookState {
             to,
             last_local: cursor(),
             last_along: u16::MAX / 2,
+            layout: super::layout(),
             cooldown_until: Instant::now(),
             keys: [false; 512],
             consume_key_up: [false; 512],
@@ -156,6 +159,20 @@ impl HookState {
         self.control == Control::Remote
     }
 
+    fn refresh_layout(&mut self) {
+        let layout = super::layout();
+        if self.layout == layout {
+            return;
+        }
+        self.layout = layout;
+        if self.remote() {
+            self.offer(Frame::Release);
+            self.return_to(self.last_along);
+        } else {
+            self.last_local = None;
+        }
+    }
+
     fn return_to(&mut self, along: u16) {
         if !self.remote() {
             return;
@@ -165,7 +182,7 @@ impl HookState {
         self.consume_key_up = self.keys;
         self.consume_button_up = self.buttons;
         self.cooldown_until = Instant::now() + COOLDOWN;
-        let point = super::screen().entry(self.from, along);
+        let point = super::layout().entry(self.from, along);
         self.last_local = Some(point);
         let _ = WindowsDesktop.move_to(point);
     }
@@ -174,6 +191,7 @@ impl HookState {
         if data.flags & LLMHF_INJECTED != 0 {
             return false;
         }
+        self.refresh_layout();
         match msg {
             WM_MOUSEMOVE => {
                 if self.remote() {
@@ -187,18 +205,17 @@ impl HookState {
                 if Instant::now() < self.cooldown_until {
                     return false;
                 }
-                let screen = super::screen();
                 if let Some(last) = last
-                    && screen.clamp(last) == last
-                    && !screen.at(self.from, last)
-                    && screen.at(self.from, point)
+                    && self.layout.contains(last)
+                    && !self.layout.at(self.from, last)
+                    && self.layout.at(self.from, point)
                     && Screen::outward(self.from, point.x - last.x, point.y - last.y)
                 {
                     let held = self.keys.contains(&true)
                         || self.buttons.contains(&true)
                         || (1..=254).any(|vk| unsafe { GetAsyncKeyState(vk) < 0 });
                     if self.control.enter(true, held) {
-                        self.last_along = screen.along(self.from, point);
+                        self.last_along = self.layout.along(self.from, point);
                         if self.offer(Frame::Enter(self.to, self.last_along)) {
                             self.link.forwarding.store(true, Relaxed);
                             return true;
@@ -235,6 +252,7 @@ impl HookState {
         if data.flags & LLKHF_INJECTED != 0 {
             return false;
         }
+        self.refresh_layout();
         let Ok(scan) = u8::try_from(data.scanCode) else {
             return self.remote();
         };
@@ -267,6 +285,7 @@ impl HookState {
     }
 
     fn raw_motion(&mut self, dx: i32, dy: i32) {
+        self.refresh_layout();
         if !self.remote() || (dx == 0 && dy == 0) {
             return;
         }

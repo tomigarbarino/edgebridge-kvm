@@ -1,21 +1,22 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::Result;
 
 use crate::{
+    layout::Layout,
     protocol::{Edge, Frame, Input},
     state::{Point, Screen},
 };
 
 pub trait Desktop {
-    fn screen(&self) -> Screen;
+    fn layout(&self) -> Arc<Layout>;
     fn move_to(&self, point: Point) -> Result<()>;
     fn input(&self, event: Input) -> Result<()>;
 }
 
 pub struct Receiver<D: Desktop> {
     desktop: D,
-    active: Option<(Edge, Point)>,
+    active: Option<(Edge, Point, Arc<Layout>)>,
     interior: bool,
     keys: BTreeSet<(u8, bool)>,
     buttons: BTreeSet<u8>,
@@ -34,37 +35,44 @@ impl<D: Desktop> Receiver<D> {
 
     pub fn enter(&mut self, edge: Edge, position: u16) -> Result<()> {
         self.release();
-        let point = self.desktop.screen().entry(edge, position);
+        let layout = self.desktop.layout();
+        let point = layout.entry(edge, position);
         self.desktop.move_to(point)?;
-        self.active = Some((edge, point));
+        self.active = Some((edge, point, layout));
         Ok(())
     }
 
     pub fn input(&mut self, event: Input) -> Result<Option<Frame>> {
-        let Some((edge, current)) = self.active else {
+        let Some((edge, current, previous)) = &self.active else {
             return Ok(None);
         };
+        let (edge, current) = (*edge, *current);
+        let layout = self.desktop.layout();
+        if *previous != layout {
+            let along = previous.along(edge, current);
+            self.release();
+            return Ok(Some(Frame::Return(along)));
+        }
         if let Input::Move(dx, dy) = event {
-            let screen = self.desktop.screen();
             let (dx, dy) = (i32::from(dx), i32::from(dy));
-            let next = screen.clamp(Point {
+            let next = layout.clamp(Point {
                 x: current.x + dx,
                 y: current.y + dy,
             });
             self.desktop.move_to(next)?;
-            if !screen.at(edge, next) && !Screen::outward(edge, dx, dy) && next != current {
+            if !layout.at(edge, next) && !Screen::outward(edge, dx, dy) && next != current {
                 self.interior = true;
             }
             if self.interior
-                && screen.at(edge, next)
+                && layout.at(edge, next)
                 && Screen::outward(edge, dx, dy)
                 && self.keys.is_empty()
                 && self.buttons.is_empty()
             {
                 self.release();
-                return Ok(Some(Frame::Return(screen.along(edge, next))));
+                return Ok(Some(Frame::Return(layout.along(edge, next))));
             }
-            self.active = Some((edge, next));
+            self.active = Some((edge, next, layout));
             return Ok(None);
         }
 
@@ -117,19 +125,22 @@ impl<D: Desktop> Drop for Receiver<D> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use super::*;
 
     #[derive(Clone, Default)]
-    struct Mock(Rc<RefCell<Vec<Input>>>);
+    struct Mock(Rc<RefCell<Vec<Input>>>, Rc<Cell<bool>>);
 
     impl Desktop for Mock {
-        fn screen(&self) -> Screen {
-            Screen {
-                width: 1000,
+        fn layout(&self) -> Arc<Layout> {
+            Arc::new(Layout::single(Screen {
+                width: if self.1.get() { 1200 } else { 1000 },
                 height: 700,
-            }
+            }))
         }
         fn move_to(&self, _: Point) -> Result<()> {
             Ok(())
@@ -138,6 +149,24 @@ mod tests {
             self.0.borrow_mut().push(event);
             Ok(())
         }
+    }
+
+    #[test]
+    fn display_change_returns_control_and_releases_held_input() -> Result<()> {
+        let desktop = Mock::default();
+        let mut receiver = Receiver::new(desktop.clone());
+        receiver.enter(Edge::Right, 32768)?;
+        receiver.input(Input::Button(0, true))?;
+        desktop.1.set(true);
+        assert!(matches!(
+            receiver.input(Input::Move(10, 0))?,
+            Some(Frame::Return(_))
+        ));
+        assert_eq!(
+            *desktop.0.borrow(),
+            [Input::Button(0, true), Input::Button(0, false)]
+        );
+        Ok(())
     }
 
     #[test]
