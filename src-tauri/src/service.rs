@@ -25,6 +25,7 @@ pub struct Status {
     pub latency_ms: Option<u32>,
     pub forwarding: bool,
     pub clipboard_active: bool,
+    pub discovery_listening: bool,
     pub approval: Option<Approval>,
     pub message: Option<String>,
 }
@@ -40,6 +41,7 @@ impl Default for Status {
             latency_ms: None,
             forwarding: false,
             clipboard_active: false,
+            discovery_listening: false,
             approval: None,
             message: None,
         }

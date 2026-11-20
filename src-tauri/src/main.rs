@@ -3,6 +3,8 @@
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod diagnostics;
+#[cfg(windows)]
 mod discovery;
 mod layout;
 #[cfg(windows)]
@@ -36,6 +38,8 @@ fn main() {
             service::listen,
             service::connect,
             service::discover,
+            diagnostics::diagnose_connection,
+            diagnostics::copy_connection_diagnostic,
             service::request_pairing,
             service::decide_pairing,
             updates::check_update,

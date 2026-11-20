@@ -4,15 +4,15 @@ use windows_sys::Win32::{
     NetworkManagement::{
         IpHelper::{
             GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-            GetAdaptersAddresses, IF_TYPE_PPP, IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL,
-            IP_ADAPTER_ADDRESSES_LH,
+            GetAdaptersAddresses, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_PPP,
+            IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL, IP_ADAPTER_ADDRESSES_LH,
         },
         Ndis::IfOperStatusUp,
     },
     Networking::WinSock::{AF_INET, IpDadStatePreferred, SOCKADDR_IN},
 };
 
-pub fn lan_addresses() -> io::Result<BTreeSet<(Ipv4Addr, u8)>> {
+pub fn lan_addresses() -> io::Result<BTreeSet<(Ipv4Addr, u8, &'static str)>> {
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
     let mut length = 15_000_u32;
     for _ in 0..3 {
@@ -38,6 +38,7 @@ pub fn lan_addresses() -> io::Result<BTreeSet<(Ipv4Addr, u8)>> {
                     {
                         continue;
                     }
+                    let kind = adapter_kind(adapter);
                     let mut node = adapter.FirstUnicastAddress;
                     while let Some(unicast) = unsafe { node.as_ref() } {
                         node = unicast.Next;
@@ -51,7 +52,11 @@ pub fn lan_addresses() -> io::Result<BTreeSet<(Ipv4Addr, u8)>> {
                             && address.sin_family == AF_INET
                         {
                             let octets = unsafe { address.sin_addr.S_un.S_addr.to_ne_bytes() };
-                            addresses.insert((Ipv4Addr::from(octets), unicast.OnLinkPrefixLength));
+                            addresses.insert((
+                                Ipv4Addr::from(octets),
+                                unicast.OnLinkPrefixLength,
+                                kind,
+                            ));
                         }
                     }
                 }
@@ -61,4 +66,28 @@ pub fn lan_addresses() -> io::Result<BTreeSet<(Ipv4Addr, u8)>> {
         }
     }
     Err(io::Error::from_raw_os_error(ERROR_BUFFER_OVERFLOW as i32))
+}
+
+fn adapter_kind(adapter: &IP_ADAPTER_ADDRESSES_LH) -> &'static str {
+    match adapter.IfType {
+        IF_TYPE_IEEE80211 => "Wi-Fi",
+        IF_TYPE_ETHERNET_CSMACD => {
+            let description = adapter.Description;
+            if !description.is_null() {
+                // Windows provides a null-terminated description in the adapter buffer.
+                let text: Vec<_> = (0..128)
+                    .map(|index| unsafe { *description.add(index) })
+                    .take_while(|&unit| unit != 0)
+                    .collect();
+                if String::from_utf16_lossy(&text)
+                    .to_ascii_lowercase()
+                    .contains("hyper-v")
+                {
+                    return "Hyper-V";
+                }
+            }
+            "Ethernet"
+        }
+        _ => "Other LAN",
+    }
 }

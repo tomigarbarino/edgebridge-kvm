@@ -31,6 +31,17 @@ pub struct Receiver {
     pub advertisement: Option<Advertisement>,
 }
 
+#[derive(Serialize)]
+pub struct InterfaceResult {
+    pub kind: &'static str,
+    pub replies: Option<usize>,
+}
+
+pub struct ScanReport {
+    pub receivers: Vec<Receiver>,
+    pub interfaces: Vec<InterfaceResult>,
+}
+
 pub fn computer_name() -> String {
     std::env::var("COMPUTERNAME")
         .ok()
@@ -69,46 +80,63 @@ pub async fn serve(
 }
 
 pub async fn scan() -> Result<Vec<Receiver>> {
+    let report = scan_report().await?;
+    ensure!(
+        report
+            .interfaces
+            .iter()
+            .any(|result| result.replies.is_some()),
+        "No LAN interface could send a discovery request."
+    );
+    Ok(report.receivers)
+}
+
+pub async fn scan_report() -> Result<ScanReport> {
     let local = crate::native::lan_addresses()?;
-    let targets = local.iter().filter_map(|&(source, prefix)| {
+    let targets = local.iter().filter_map(|&(source, prefix, kind)| {
         broadcast_for(source, prefix)
-            .map(|broadcast| (source, SocketAddrV4::new(broadcast, DISCOVERY_PORT)))
+            .map(|broadcast| (source, SocketAddrV4::new(broadcast, DISCOVERY_PORT), kind))
     });
-    let local_ips = local.iter().map(|&(ip, _)| ip).collect::<BTreeSet<_>>();
-    scan_targets(targets, &local_ips).await
+    let local_ips = local.iter().map(|&(ip, _, _)| ip).collect::<BTreeSet<_>>();
+    Ok(scan_targets(targets, &local_ips).await)
 }
 
 async fn scan_targets(
-    targets: impl IntoIterator<Item = (Ipv4Addr, SocketAddrV4)>,
+    targets: impl IntoIterator<Item = (Ipv4Addr, SocketAddrV4, &'static str)>,
     local_ips: &BTreeSet<Ipv4Addr>,
-) -> Result<Vec<Receiver>> {
+) -> ScanReport {
     let mut scans = JoinSet::new();
     let deadline = Instant::now() + Duration::from_millis(1200);
-    for (source, target) in targets {
-        scans.spawn(scan_interface(source, target, deadline));
+    for (source, target, kind) in targets {
+        scans.spawn(async move { (kind, scan_interface(source, target, deadline).await) });
     }
     let mut found = BTreeMap::new();
-    let mut working_interfaces = 0;
+    let mut interfaces = Vec::new();
     while let Some(result) = scans.join_next().await {
-        let Ok(Ok(receivers)) = result else { continue };
-        working_interfaces += 1;
-        for (address, advertisement) in receivers {
-            if !local_ips.contains(&address) {
-                insert_receiver(&mut found, address, advertisement);
+        let Ok((kind, result)) = result else { continue };
+        let replies = result.ok().map(|receivers| {
+            let mut count = 0;
+            for (address, advertisement) in receivers {
+                if !local_ips.contains(&address) {
+                    count += 1;
+                    insert_receiver(&mut found, address, advertisement);
+                }
             }
-        }
+            count
+        });
+        interfaces.push(InterfaceResult { kind, replies });
     }
-    ensure!(
-        working_interfaces > 0,
-        "No LAN interface could send a discovery request."
-    );
-    Ok(found
-        .into_iter()
-        .map(|(address, advertisement)| Receiver {
-            address,
-            advertisement,
-        })
-        .collect())
+    interfaces.sort_unstable_by_key(|row| (row.kind, row.replies));
+    ScanReport {
+        receivers: found
+            .into_iter()
+            .map(|(address, advertisement)| Receiver {
+                address,
+                advertisement,
+            })
+            .collect(),
+        interfaces,
+    }
 }
 
 fn broadcast_for(source: Ipv4Addr, prefix: u8) -> Option<Ipv4Addr> {
@@ -210,16 +238,18 @@ mod tests {
             },
             || true,
         ));
-        let result = scan_targets(
+        let report = scan_targets(
             [
-                (Ipv4Addr::new(192, 0, 2, 1), target),
-                (Ipv4Addr::LOCALHOST, target),
+                (Ipv4Addr::new(192, 0, 2, 1), target, "Virtual"),
+                (Ipv4Addr::LOCALHOST, target, "Wi-Fi"),
             ],
             &[Ipv4Addr::LOCALHOST].into_iter().collect(),
         )
         .await;
         server.abort();
-        let receivers = result?;
+        let receivers = report.receivers;
+        assert_eq!(report.interfaces[0].replies, None);
+        assert_eq!(report.interfaces[1].replies, Some(1));
         assert_eq!(receivers.len(), 1);
         assert_eq!(receivers[0].address, peer);
         assert_eq!(

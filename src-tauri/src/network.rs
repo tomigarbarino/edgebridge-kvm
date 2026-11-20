@@ -61,6 +61,7 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
         status.phase = "waiting";
         status.code = Some(code);
         status.address = discovery::suggested_address();
+        status.discovery_listening = discovered;
         status.message =
             (!discovered).then(|| "Discovery unavailable. Use the receiver IPv4 address.".into());
     });
@@ -103,6 +104,7 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
             _ = discovery::serve(socket, advertisement, || shared.ready_to_pair(generation)) => {
                 shared.update(generation, |status| {
                     status.message = Some("Discovery stopped. Use the receiver IPv4 address.".into());
+                    status.discovery_listening = false;
                 });
                 connections.await
             }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
+import { ConnectionDiagnostics } from './ConnectionDiagnostics';
 import './styles.css';
 
 type Role = 'primary' | 'secondary';
@@ -338,6 +339,8 @@ function App() {
           : <button className="primary" type="button" disabled={busy} onClick={() => void action('listen', { shareClipboard })}>Start receiver</button>}
       </div>
     </section>}
+    <ConnectionDiagnostics key={selected} primary={selected === 'primary'}
+      connected={status?.phase === 'connected'} disabled={!hasStatus || busy || installing} />
     <div className="mt-4 flex flex-wrap items-center gap-2">
       <button className="secondary" type="button" disabled={busy || installing || !!approval} onClick={() => void swapRole()}>
         {selected === 'primary' ? 'Make this PC secondary' : 'Make this PC primary'}

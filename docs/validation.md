@@ -6,6 +6,7 @@
 - A localhost TLS session accepts the invitation, reconnects, rejects a different receiver certificate, and rejects a wrong token under the correct certificate.
 - A localhost discovery test checks both the original address response and the name and fingerprint response. A TLS test compares the two visual codes, verifies that one approval cannot issue a credential, rejects a declined request, and connects with the credential issued after both approve.
 - Discovery tests check subnet broadcast calculations and successful discovery when a different source interface cannot bind. The legacy and named replies for the same receiver resolve to one PC.
+- Diagnostic tests distinguish a reachable TCP socket from a closed port and confirm that reports omit pairing secrets, names, addresses, and raw errors.
 - Geometry tests verify the default primary-left to secondary-right route, the return path, proportional placement, and vertical configurations.
 - Geometry tests cover a middle monitor moving the outer edge, negative origins and staggered monitors. A simulated receiving desktop verifies return and button release after a layout change.
 - Control tests cover offline behavior, held-input guards, return and disconnect.

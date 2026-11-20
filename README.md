@@ -22,6 +22,8 @@ If discovery is unavailable or one PC is on an older version, use **Show manual 
 
 To change which mouse and keyboard are shared, use **Make this PC primary** on one PC and **Make this PC secondary** on the other. This ends the active session on each PC. Start the new receiver, check the layout on the new primary, and pair again. Roles and edges are saved locally.
 
+If pairing stalls, select **Diagnose connection** on either PC. The primary tests LAN discovery by interface and checks TCP port 46387 when it finds one receiver or you enter an IPv4 address. The secondary reports whether its receiver and discovery are listening. If approval is in progress or the PCs are connected, the diagnostic reports that state without sending test traffic. **Copy diagnostic** includes the app version, role and test results. Pairing codes, device names and IP addresses are omitted.
+
 ### Move a shared HDMI monitor
 
 In Windows Display settings, use **Extend** and place the monitor on the side where it physically sits. Keep the EdgeBridge position set to where the other PC sits. With v0.4.1 or later on both PCs, EdgeBridge recalculates the crossing edge when Windows detects a screen being attached or removed. If a display change happens while controlling the other PC, move the mouse to return control locally, then cross the new outer edge.
