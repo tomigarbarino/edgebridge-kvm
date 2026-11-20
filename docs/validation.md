@@ -4,6 +4,7 @@
 
 - Fixed-size wire frames round-trip in order. Unknown, malformed, and truncated frames are rejected.
 - A localhost TLS session accepts the invitation, reconnects, rejects a different receiver certificate, and rejects a wrong token under the correct certificate.
+- A localhost discovery test checks both the original address response and the name and fingerprint response. A TLS test compares the two visual codes, verifies that one approval cannot issue a credential, rejects a declined request, and connects with the credential issued after both approve.
 - Geometry tests verify the default primary-left to secondary-right route, the return path, proportional placement, and vertical configurations.
 - Control tests cover offline behavior, held-input guards, return and disconnect.
 - A simulated receiving desktop verifies entry and return, prevents a bounce from entry momentum, and checks that teardown releases keys and mouse buttons.
@@ -18,12 +19,14 @@ Use two Windows PCs on the same private Wi-Fi. Put the primary PC on the right, 
 
 | Case | Expected result |
 | --- | --- |
-| Discover the secondary and pair | The primary finds the receiver. Both show connected, and the primary displays LAN RTT. |
+| Discover the secondary and pair | The primary displays the secondary's name. A request shows the same number on both PCs. Both show connected only after both confirmations, and the primary displays LAN RTT. |
+| Decline or ignore a pairing request | The pending prompt clears and the receiver stays available for a fresh request. |
 | Incorrect code and manual IPv4 | The wrong code cannot control the secondary. With the correct code, manual IPv4 works even when broadcast discovery is unavailable. |
 | Move to the primary's left edge | The cursor appears just inside the secondary's right edge at the corresponding height. The opposite edge of the primary does not activate the default connection. |
 | Move inward on the secondary, then cross the right edge | Control returns just inside the primary's left edge, preserving relative height. Sustained motion toward the entry edge immediately after entering does not bounce. |
 | Type, click, drag within the secondary, scroll, and use keyboard shortcuts | The secondary responds. The primary editor receives no forwarded typing or mouse events. Check both wheel axes and extra mouse buttons if available. |
 | Change resolutions, scaling and edge selections | Try 1920×1080 at 100% and 2560×1440 at 150%. Verify placement at multiple heights. Repeat with top and bottom. |
+| Swap primary and secondary | Change role on both PCs, start the new receiver, choose its physical position on the new primary, and pair again. Only the new primary's peripherals are forwarded. |
 | Press Ctrl + Alt + F12 during remote control | The primary recovers immediately. The secondary releases any held modifier or mouse button. |
 | Disconnect Wi-Fi or stop the receiver while forwarding | Local input returns when Windows reports the drop or the heartbeat expires, normally within about 1.5 seconds. The receiver releases remote keys and buttons once it observes the failure. |
 | Restore Wi-Fi without restarting either app | The primary retries and reconnects to the same address. It waits for a new edge crossing before forwarding input. |

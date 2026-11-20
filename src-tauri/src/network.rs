@@ -27,12 +27,24 @@ use crate::{
 const HANDSHAKE: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_millis(250);
 const MAX_HANDSHAKES: usize = 8;
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(45);
+
+struct ServerApproval {
+    shared: Arc<Shared>,
+    generation: u64,
+    issued: Mutex<Option<Token>>,
+}
 
 pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool) -> Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, TCP_PORT))
         .await
         .context("Could not open the receiver port. Is EdgeBridge already running?")?;
     let (mut config, code, token) = pairing::create()?;
+    let advertisement = discovery::Advertisement {
+        name: discovery::computer_name(),
+        pin: Invite::parse(&code)?.pin(),
+    };
+    config.alpn_protocols.push(pairing::APPROVAL_ALPN.to_vec());
     if share_clipboard {
         config.alpn_protocols.insert(0, clipboard::ALPN.to_vec());
     }
@@ -40,6 +52,11 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
     // Manual IPv4 connection remains available if UDP is occupied or disabled.
     let udp = discovery::socket().await.ok();
     let discovered = udp.is_some();
+    let approval = Arc::new(ServerApproval {
+        shared: Arc::clone(&shared),
+        generation,
+        issued: Mutex::new(None),
+    });
     shared.update(generation, |status| {
         status.phase = "waiting";
         status.code = Some(code);
@@ -50,7 +67,8 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
 
     let connections = async {
         loop {
-            let (mut wire, address) = accept_peer(&listener, &acceptor, token).await?;
+            let (mut wire, address) =
+                accept_connections(&listener, &acceptor, token, Some(&approval)).await?;
             let side = match server_clipboard(&mut wire, &listener, &acceptor).await {
                 Ok(side) => side,
                 Err(_) => continue,
@@ -82,7 +100,7 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
         tokio::pin!(connections);
         tokio::select! {
             result = &mut connections => result,
-            _ = discovery::serve(socket) => {
+            _ = discovery::serve(socket, advertisement, || shared.ready_to_pair(generation)) => {
                 shared.update(generation, |status| {
                     status.message = Some("Discovery stopped. Use the receiver IPv4 address.".into());
                 });
@@ -130,6 +148,15 @@ async fn accept_peer(
     acceptor: &TlsAcceptor,
     token: Token,
 ) -> Result<(PeerStream, SocketAddr)> {
+    accept_connections(listener, acceptor, token, None).await
+}
+
+async fn accept_connections(
+    listener: &TcpListener,
+    acceptor: &TlsAcceptor,
+    token: Token,
+    approval: Option<&Arc<ServerApproval>>,
+) -> Result<(PeerStream, SocketAddr)> {
     let mut handshakes = JoinSet::new();
     loop {
         tokio::select! {
@@ -145,9 +172,24 @@ async fn accept_peer(
             accepted = listener.accept(), if handshakes.len() < MAX_HANDSHAKES => {
                 let (stream, address) = accepted?;
                 let acceptor = acceptor.clone();
+                let approval = approval.cloned();
                 handshakes.spawn(async move {
-                    let wire = timeout(HANDSHAKE, authorize(stream, &acceptor, token))
-                        .await.ok()?.ok()?;
+                    let mut wire = timeout(HANDSHAKE, accept_secure(stream, &acceptor)).await.ok()?.ok()?;
+                    if wire.get_ref().1.alpn_protocol() == Some(pairing::APPROVAL_ALPN) {
+                        if let Some(approval) = approval {
+                            let _ = timeout(APPROVAL_TIMEOUT, approve_connection(wire, &approval)).await;
+                        }
+                        return None;
+                    }
+                    let frame = timeout(HANDSHAKE, Frame::read(&mut wire)).await.ok()?.ok()?;
+                    let Frame::Hello(candidate) = frame else { return None };
+                    let valid = pairing::authenticate(candidate, token)
+                        || approval.as_ref().is_some_and(|approval| {
+                            approval.issued.lock().unwrap().is_some_and(|token| pairing::authenticate(candidate, token))
+                        });
+                    if !valid {
+                        return None;
+                    }
                     Some((wire, address))
                 });
             }
@@ -155,15 +197,113 @@ async fn accept_peer(
     }
 }
 
-async fn authorize(stream: TcpStream, acceptor: &TlsAcceptor, token: Token) -> Result<PeerStream> {
+async fn accept_secure(stream: TcpStream, acceptor: &TlsAcceptor) -> Result<PeerStream> {
     stream.set_nodelay(true)?;
-    let mut stream = acceptor.accept(stream).await?;
-    ensure!(
-        matches!(Frame::read(&mut stream).await?, Frame::Hello(candidate)
-        if pairing::authenticate(candidate, token)),
-        "Pairing denied"
-    );
-    Ok(stream)
+    Ok(acceptor.accept(stream).await?)
+}
+
+async fn approve_connection(mut wire: PeerStream, approval: &ServerApproval) -> Result<()> {
+    let name = timeout(HANDSHAKE, async {
+        let length = usize::from(wire.read_u8().await?);
+        ensure!((1..=48).contains(&length), "Invalid PC name");
+        let mut bytes = vec![0; length];
+        wire.read_exact(&mut bytes).await?;
+        let name = String::from_utf8(bytes)?;
+        ensure!(discovery::valid_name(&name), "Invalid PC name");
+        Ok::<_, anyhow::Error>(name)
+    })
+    .await??;
+    let comparison =
+        wire.get_ref()
+            .1
+            .export_keying_material([0; 8], pairing::APPROVAL_EXPORTER, None)?;
+    let (_prompt, decision) =
+        approval
+            .shared
+            .prompt(approval.generation, name, pairing::confirmation(comparison))?;
+    wire.write_u8(1).await?;
+    wire.flush().await?;
+    let remote = async {
+        ensure!(wire.read_u8().await? == 1, "Pairing declined");
+        Ok::<_, anyhow::Error>(())
+    };
+    let local = async {
+        ensure!(decision.await?, "Pairing declined");
+        Ok::<_, anyhow::Error>(())
+    };
+    tokio::try_join!(remote, local)?;
+    let mut token = [0; 32];
+    getrandom::fill(&mut token).map_err(|err| anyhow::anyhow!("{err}"))?;
+    *approval.issued.lock().unwrap() = Some(token);
+    wire.write_all(&token).await?;
+    wire.flush().await?;
+    Ok(())
+}
+
+pub async fn request_pairing(
+    shared: Arc<Shared>,
+    generation: u64,
+    ip: Ipv4Addr,
+    advertisement: discovery::Advertisement,
+    edges: (Edge, Edge),
+    share_clipboard: bool,
+) -> Result<()> {
+    let invite = request_invite(&shared, generation, (ip, TCP_PORT).into(), advertisement).await?;
+    send(shared, generation, ip, invite, edges, share_clipboard).await
+}
+
+async fn request_invite(
+    shared: &Shared,
+    generation: u64,
+    address: SocketAddr,
+    advertisement: discovery::Advertisement,
+) -> Result<Invite> {
+    let pin = advertisement.pin;
+    let mut config = pairing::client(pin)?;
+    config.alpn_protocols = vec![pairing::APPROVAL_ALPN.to_vec()];
+    let connector = TlsConnector::from(Arc::new(config));
+    let mut wire = timeout(HANDSHAKE, async {
+        let stream = TcpStream::connect(address).await?;
+        stream.set_nodelay(true)?;
+        let mut wire = connector
+            .connect(ServerName::try_from("edgebridge.local")?, stream)
+            .await?;
+        let name = discovery::computer_name();
+        wire.write_u8(name.len() as u8).await?;
+        wire.write_all(name.as_bytes()).await?;
+        wire.flush().await?;
+        ensure!(wire.read_u8().await? == 1, "Pairing unavailable");
+        Ok::<_, anyhow::Error>(wire)
+    })
+    .await
+    .context("The other PC did not answer the pairing request")?
+    .context("Pairing unavailable. Check that the receiver is ready and try again.")?;
+    let comparison =
+        wire.get_ref()
+            .1
+            .export_keying_material([0; 8], pairing::APPROVAL_EXPORTER, None)?;
+    let token = timeout(APPROVAL_TIMEOUT, async {
+        let (_prompt, decision) = shared.prompt(
+            generation,
+            advertisement.name,
+            pairing::confirmation(comparison),
+        )?;
+        let accepted = tokio::select! {
+            result = decision => result?,
+            _ = wire.read_u8() => bail!("The other PC closed the pairing request."),
+        };
+        ensure!(accepted, "Pairing declined");
+        wire.write_u8(1).await?;
+        wire.flush().await?;
+        let mut token = [0; 32];
+        wire.read_exact(&mut token)
+            .await
+            .context("Pairing declined or expired on the other PC.")?;
+        Ok::<_, anyhow::Error>(token)
+    })
+    .await
+    .context("Pairing request expired")??;
+    Ok(Invite::from_approval(pin, token))
 }
 
 async fn receive(
@@ -353,6 +493,68 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn discovered_pairing_issues_a_token_only_after_both_pcs_accept() -> Result<()> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let (mut config, code, manual_token) = pairing::create()?;
+        config.alpn_protocols.push(pairing::APPROVAL_ALPN.to_vec());
+        let pin = Invite::parse(&code)?.pin();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let secondary = Arc::new(Shared::default());
+        let primary = Shared::default();
+        let approval = Arc::new(ServerApproval {
+            shared: Arc::clone(&secondary),
+            generation: 0,
+            issued: Mutex::new(None),
+        });
+        let server = accept_connections(&listener, &acceptor, manual_token, Some(&approval));
+        let client = async {
+            for accepted in [false, true] {
+                let invitation = request_invite(
+                    &primary,
+                    0,
+                    address,
+                    discovery::Advertisement {
+                        name: "Secondary-PC".into(),
+                        pin,
+                    },
+                );
+                let approve = async {
+                    let (local, remote) = loop {
+                        if let (Some(local), Some(remote)) =
+                            (primary.snapshot().approval, secondary.snapshot().approval)
+                        {
+                            break (local, remote);
+                        }
+                        sleep(Duration::from_millis(5)).await;
+                    };
+                    assert_eq!(local.comparison, remote.comparison);
+                    assert_eq!(local.comparison.len(), 8);
+                    primary.decide(local.id, true).map_err(anyhow::Error::msg)?;
+                    assert!(approval.issued.lock().unwrap().is_none());
+                    secondary
+                        .decide(remote.id, accepted)
+                        .map_err(anyhow::Error::msg)?;
+                    Ok::<_, anyhow::Error>(())
+                };
+                let (invite, choice) = tokio::join!(invitation, approve);
+                choice?;
+                assert_eq!(invite.is_ok(), accepted);
+                assert!(primary.snapshot().approval.is_none());
+                if let Ok(invite) = invite {
+                    assert!(!pairing::authenticate(invite.token, manual_token));
+                    let connector = TlsConnector::from(Arc::new(invite.client()?));
+                    return connect(address, invite, &connector).await;
+                }
+                assert!(approval.issued.lock().unwrap().is_none());
+            }
+            bail!("The accepted request did not authenticate")
+        };
+        timeout(HANDSHAKE, async { tokio::try_join!(server, client) }).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn authorizes_reconnects_and_rejects_wrong_token_and_cert() -> Result<()> {
         let localhost = Ipv4Addr::LOCALHOST;
         let listener = TcpListener::bind((localhost, 0)).await?;
@@ -364,7 +566,16 @@ mod tests {
         let server = async {
             for expected in [true, true, false, false] {
                 let (stream, _) = listener.accept().await?;
-                let result = authorize(stream, &acceptor, token).await;
+                let result = async {
+                    let mut wire = accept_secure(stream, &acceptor).await?;
+                    ensure!(
+                        matches!(Frame::read(&mut wire).await?, Frame::Hello(candidate)
+                        if pairing::authenticate(candidate, token)),
+                        "Pairing denied"
+                    );
+                    Ok::<_, anyhow::Error>(wire)
+                }
+                .await;
                 assert_eq!(result.is_ok(), expected);
                 if let Ok(mut wire) = result {
                     Frame::Ready.send(&mut wire).await?;

@@ -35,6 +35,8 @@ fn main() {
             service::listen,
             service::connect,
             service::discover,
+            service::request_pairing,
+            service::decide_pairing,
             updates::check_update,
             updates::install_update
         ])

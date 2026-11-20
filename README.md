@@ -13,10 +13,14 @@ Move the cursor to the **left edge of the primary PC**. It enters near the right
 ## Install and pair
 
 1. On each PC, run the x64 setup executable from [Releases](../../releases). Use Windows 11 x64 with Microsoft Edge WebView2 and a mouse that reports relative movement. Keep the app open on both PCs.
-2. On the left PC, select **Secondary PC**, then **Start receiver**. If Windows Firewall prompts, allow EdgeBridge on private networks.
-3. On the right PC, select **Primary PC**. Choose the receiver discovered on Wi-Fi or enter its IPv4 address manually. Use `ipconfig` on the secondary PC to find the IPv4 address for its Wi-Fi adapter if multiple interfaces are present.
-4. Transfer the pairing code privately from the secondary PC to the primary PC. Paste it into **Pairing code**, keep **Primary exit edge = left** and **Secondary entry and return edge = right**, and select **Connect**.
+2. On the PC you want to control, select **Secondary PC**, then **Start receiver**. If Windows Firewall prompts, allow EdgeBridge on private networks. Turn on clipboard sharing on both PCs before connecting if you want to use it.
+3. On the PC whose mouse and keyboard you want to use, select **Primary PC**. Set where the secondary sits with **Left**, **Right**, **Above**, or **Below**, then select **Pair with** and the other PC’s name.
+4. With v0.4.0 or later on both PCs, compare the eight digits shown on both screens. Select **Numbers match** on both PCs if the numbers match.
 5. Check that both PCs show **Connected**. The primary PC displays the measured LAN round-trip time. Use **Disconnect** or **Stop receiver** to end the session.
+
+If discovery is unavailable or one PC is on an older version, use **Show manual pairing code** on the secondary and **Manual pairing and custom edges** on the primary. Enter the secondary’s IPv4 address and its pairing code privately, then select **Connect with code**. The secondary shows a suggested IPv4 address when available.
+
+To change which mouse and keyboard are shared, use **Make this PC primary** on one PC and **Make this PC secondary** on the other. This ends the active session on each PC. Start the new receiver, check the layout on the new primary, and pair again. Roles and edges are saved locally.
 
 The v0.1 installer is unsigned. Check its SHA-256 against the published release checksum if you download a copy from somewhere other than the release page. WebView2 may require a one-time download during installation if it is missing.
 
@@ -41,8 +45,10 @@ Ask me which option applies if I leave either choice open.
    sharing, enable Share clipboard on both PCs on each computer before
    starting the receiver or connecting.
 3. On the secondary PC, select Secondary PC and Start receiver.
-   On the primary PC, select Primary PC, find the secondary on Wi-Fi,
-   and let me enter the pairing code directly in the app.
+   On the primary PC, select Primary PC, choose the secondary's position
+   and select Pair with the other PC's name. Ask me to compare the number
+   on both screens before accepting on each PC. If this option is absent,
+   use manual pairing and let me enter the pairing code directly in the app.
 4. Confirm Connected on both PCs. If sharing is enabled, confirm
    Clipboard sharing active and test with fresh text between two Notepad windows.
 
@@ -73,7 +79,7 @@ Clipboard sharing sends Unicode text, compatible Windows bitmap images and up to
 
 ## Pairing and privacy
 
-Starting the receiver explicitly enables one connected client at a time. The pairing code contains a randomly generated 256-bit invitation secret and a fingerprint of the receiver’s temporary TLS certificate. The primary verifies the fingerprint before sending the secret over TLS 1.3. Discovery only proposes addresses and does not grant control. Keep the code private and stop the receiver to revoke it. Starting it again generates a new code.
+Starting the receiver explicitly enables one connected client at a time. LAN discovery advertises a computer name and certificate fingerprint. Verify the matching number on both screens before approving a request. EdgeBridge issues a temporary credential after both PCs accept. The manual pairing code includes a separate 256-bit secret and the receiver’s TLS certificate fingerprint. Keep the manual code private. Stopping the receiver revokes both forms of access.
 
 Key and mouse events are processed in memory during forwarding. EdgeBridge has no telemetry and sends neither input events nor screenshots to external servers. The app saves the selected edge settings locally. Pairing material lives in memory for the session.
 

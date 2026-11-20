@@ -16,6 +16,8 @@ use crate::protocol::Token;
 
 const PREFIX: &str = "EB1-";
 const ALPN: &[u8] = b"edgebridge-kvm/1";
+pub const APPROVAL_ALPN: &[u8] = b"edgebridge-kvm/3-approval";
+pub const APPROVAL_EXPORTER: &[u8] = b"EXPORTER-EdgeBridge-pairing-confirmation";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Invite {
@@ -49,19 +51,35 @@ impl Invite {
     }
 
     pub fn client(self) -> Result<ClientConfig> {
-        let provider = ring::default_provider();
-        let verifier = PinVerifier {
-            pin: self.pin,
-            algorithms: provider.signature_verification_algorithms,
-        };
-        let mut config = ClientConfig::builder_with_provider(Arc::new(provider))
-            .with_protocol_versions(&[&rustls::version::TLS13])?
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth();
-        config.alpn_protocols = vec![ALPN.to_vec()];
-        Ok(config)
+        client(self.pin)
     }
+
+    pub fn pin(self) -> [u8; 32] {
+        self.pin
+    }
+
+    pub fn from_approval(pin: [u8; 32], token: Token) -> Self {
+        Self { pin, token }
+    }
+}
+
+pub fn client(pin: [u8; 32]) -> Result<ClientConfig> {
+    let provider = ring::default_provider();
+    let verifier = PinVerifier {
+        pin,
+        algorithms: provider.signature_verification_algorithms,
+    };
+    let mut config = ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    config.alpn_protocols = vec![ALPN.to_vec()];
+    Ok(config)
+}
+
+pub fn confirmation(bytes: [u8; 8]) -> String {
+    format!("{:08}", u64::from_be_bytes(bytes) % 100_000_000)
 }
 
 pub fn create() -> Result<(ServerConfig, String, Token)> {

@@ -7,6 +7,9 @@ import './styles.css';
 type Role = 'primary' | 'secondary';
 type Edge = 'left' | 'right' | 'top' | 'bottom';
 type Phase = 'idle' | 'starting' | 'waiting' | 'connected' | 'reconnecting' | 'stopping' | 'error';
+type Advertisement = { name: string; pin: number[] };
+type Receiver = { address: string; advertisement: Advertisement | null };
+type Approval = { id: number; name: string; comparison: string; accepted: boolean };
 type Status = {
   phase: Phase;
   role: Role | null;
@@ -16,6 +19,7 @@ type Status = {
   latency_ms: number | null;
   forwarding: boolean;
   clipboard_active: boolean;
+  approval: Approval | null;
   message: string | null;
 };
 
@@ -29,6 +33,8 @@ const labels: Record<Phase, string> = {
   error: 'Connection error',
 };
 const edges: Edge[] = ['left', 'right', 'top', 'bottom'];
+const opposite: Record<Edge, Edge> = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
+const positionLabels: Record<Edge, string> = { left: 'Left', right: 'Right', top: 'Above', bottom: 'Below' };
 
 function savedEdge(key: string, fallback: Edge): Edge {
   const stored = localStorage.getItem(key);
@@ -64,12 +70,12 @@ function EdgeField({ label, value, change, disabled }: {
 function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [shareClipboard, setShareClipboard] = useState(false);
-  const [role, setRole] = useState<Role>('primary');
+  const [role, setRole] = useState<Role>(() => localStorage.getItem('role') === 'secondary' ? 'secondary' : 'primary');
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
   const [from, setFrom] = useState<Edge>(() => savedEdge('primary-edge', 'left'));
   const [to, setTo] = useState<Edge>(() => savedEdge('secondary-edge', 'right'));
-  const [discovered, setDiscovered] = useState<string[]>([]);
+  const [discovered, setDiscovered] = useState<Receiver[]>([]);
   const [scanMessage, setScanMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -82,6 +88,7 @@ function App() {
   const running = !!status?.role;
   const selected = status?.role ?? role;
   const disabled = running || busy || installing;
+  const approval = status?.approval;
 
   useEffect(() => {
     let alive = true;
@@ -105,16 +112,18 @@ function App() {
     localStorage.setItem('secondary-edge', to);
   }, [from, to]);
 
+  useEffect(() => { localStorage.setItem('role', role); }, [role]);
+
   useEffect(() => {
-    if (running || selected !== 'primary' || !hasStatus) return;
+    if (running || !hasStatus) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     async function detect() {
       try {
-        const results = await invoke<string[]>('discover');
+        const results = await invoke<Receiver[]>('discover');
         if (active) {
           setDiscovered(results);
-          if (results.length === 1) setAddress((current) => current || results[0]);
+          if (results.length === 1) setAddress((current) => current || results[0].address);
         }
       } catch {
         // The manual search reports errors. Background discovery is optional.
@@ -124,7 +133,7 @@ function App() {
     }
     void detect();
     return () => { active = false; clearTimeout(timer); };
-  }, [hasStatus, running, selected]);
+  }, [hasStatus, running]);
 
   async function checkUpdates(manual: boolean) {
     setCheckingUpdate(true);
@@ -158,15 +167,17 @@ function App() {
     }
   }
 
-  async function action(command: string, args?: Record<string, string | boolean>) {
+  async function action(command: string, args?: Record<string, unknown>) {
     setError('');
     setBusy(true);
     try {
       await invoke(command, args);
       setStatus(await invoke<Status>('status'));
       if (command === 'connect' || command === 'stop') setCode('');
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -176,10 +187,10 @@ function App() {
     setScanning(true);
     setScanMessage('');
     try {
-      const results = await invoke<string[]>('discover');
+      const results = await invoke<Receiver[]>('discover');
       setDiscovered(results);
-      if (results.length === 1) setAddress(results[0]);
-      if (!results.length) setScanMessage('No receiver found. Enter its IPv4 address below.');
+      if (results.length === 1) setAddress(results[0].address);
+      if (!results.length) setScanMessage('No available PCs found. Start the receiver on the other PC.');
     } catch {
       setScanMessage('Discovery failed. Enter the receiver’s IPv4 address below.');
     } finally {
@@ -192,6 +203,26 @@ function App() {
     void action('connect', { address, code, from, to, shareClipboard });
   }
 
+  function setPosition(edge: Edge) {
+    setFrom(edge);
+    setTo(opposite[edge]);
+  }
+
+  async function swapRole() {
+    if (running && !await action('stop')) return;
+    setRole(selected === 'primary' ? 'secondary' : 'primary');
+    setFrom(to);
+    setTo(from);
+  }
+
+  function requestPairing(receiver: Receiver) {
+    if (!receiver.advertisement) return;
+    setRole('primary');
+    void action('request_pairing', {
+      address: receiver.address, advertisement: receiver.advertisement, from, to, shareClipboard,
+    });
+  }
+
   return <main className="mx-auto max-w-2xl px-5 py-8 sm:px-9 sm:py-10">
     <header className="mb-7 flex items-center justify-between gap-3">
       <div className="flex items-center gap-3">
@@ -199,7 +230,7 @@ function App() {
         <h1 className="text-2xl font-semibold tracking-tight">EdgeBridge KVM</h1>
       </div>
       <div className="status" data-connected={status?.phase === 'connected'} role="status">
-        <span aria-hidden="true" />{labels[status?.phase ?? 'idle']}
+        <span aria-hidden="true" />{approval ? 'Confirm pairing' : labels[status?.phase ?? 'idle']}
       </div>
     </header>
 
@@ -213,52 +244,95 @@ function App() {
         onChange={(event) => setShareClipboard(event.target.checked)} />
       Share clipboard on both PCs
     </label>
+    {approval && <section className="panel mb-4" aria-labelledby="approval-title">
+      <h2 id="approval-title">Pair with {approval.name}?</h2>
+      <p className="description">Compare the number on both PCs. Accept on both only if it matches.</p>
+      <p className="comparison" aria-label={`Pairing number ${approval.comparison.split('').join(' ')}`}>
+        {approval.comparison.slice(0, 4)} {approval.comparison.slice(4)}
+      </p>
+      {approval.accepted ? <p className="hint" role="status">Waiting for the other PC to accept.</p> : <div className="actions">
+        <button className="primary" type="button" disabled={busy} onClick={() =>
+          void action('decide_pairing', { id: approval.id, accept: true })}>Numbers match</button>
+        <button className="secondary" type="button" disabled={busy} onClick={() =>
+          void action('decide_pairing', { id: approval.id, accept: false })}>Decline</button>
+      </div>}
+    </section>}
+    {selected === 'secondary' && !running && discovered.some((pc) => pc.advertisement) &&
+      <p className="notice" role="status">
+        {discovered.filter((pc) => pc.advertisement).map((pc) => pc.advertisement!.name).join(', ')} available to pair.
+        <button className="secondary ml-2" type="button" onClick={() => setRole('primary')}>Use this PC as primary</button>
+      </p>}
     {selected === 'primary' ? <form className="panel" onSubmit={connect}>
       <h2>Connect to the secondary PC</h2>
-      <p className="description">Pair this computer to share its mouse and keyboard.</p>
+      <p className="description">Choose the other PC once its receiver is ready.</p>
+      {!running && <div className="actions">
+        {discovered.map((pc) => pc.advertisement && <button className="primary" key={pc.address}
+          type="button" disabled={disabled} onClick={() => requestPairing(pc)}>
+          Pair with {pc.advertisement.name} <small>({pc.address})</small>
+        </button>)}
+        <button className="secondary" type="button" disabled={disabled || scanning} onClick={() => void scan()}>
+          {scanning ? 'Scanning…' : 'Find on Wi-Fi'}
+        </button>
+      </div>}
+      {scanMessage && <p className="hint" role="status">{scanMessage}</p>}
       <LayoutPreview from={from} to={to} />
-      <div className="grid grid-cols-2 gap-3">
-        <EdgeField label="Primary exit edge" value={from} change={setFrom} disabled={disabled} />
-        <EdgeField label="Secondary entry and return edge" value={to} change={setTo} disabled={disabled} />
-      </div>
+      <fieldset className="mb-3" disabled={disabled}>
+        <legend className="field">Where is the secondary PC?</legend>
+        <div className="position-options">
+          {edges.map((edge) => <button key={edge} className="secondary" type="button"
+            aria-pressed={from === edge && to === opposite[edge]} onClick={() => setPosition(edge)}>
+            {positionLabels[edge]}
+          </button>)}
+        </div>
+      </fieldset>
+      {!running && <details>
+        <summary>Manual pairing and custom edges</summary>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <EdgeField label="Primary exit edge" value={from} change={setFrom} disabled={disabled} />
+          <EdgeField label="Secondary entry and return edge" value={to} change={setTo} disabled={disabled} />
+        </div>
       <label className="field mt-4" htmlFor="address">Secondary IPv4 address</label>
       <div className="flex flex-wrap gap-2">
         <input className="min-w-28 flex-1" id="address" value={address} required disabled={disabled} placeholder="192.168.1.42"
           onChange={(event) => setAddress(event.target.value)} autoComplete="off" spellCheck={false} />
-        <button className="secondary" type="button" disabled={disabled || scanning} onClick={() => void scan()}>
-          {scanning ? 'Scanning…' : 'Find on Wi-Fi'}
-        </button>
       </div>
-      {scanMessage && <p className="hint" role="status">{scanMessage}</p>}
-      {discovered.length > 1 && !running && <ul className="flex flex-wrap gap-2 py-2" aria-label="Discovered receivers">
-        {discovered.map((ip) => <li key={ip}><button className="secondary" type="button" onClick={() => setAddress(ip)}>{ip}</button></li>)}
+      {discovered.length > 1 && <ul className="flex flex-wrap gap-2 py-2" aria-label="Discovered receivers">
+        {discovered.map(({ address }) => <li key={address}><button className="secondary" type="button" onClick={() => setAddress(address)}>{address}</button></li>)}
       </ul>}
-      {!running && <label className="field mt-4">
+      <label className="field mt-4">
         Pairing code
         <input value={code} type="password" required disabled={busy} placeholder="EB1-…" spellCheck={false}
           autoComplete="off" onChange={(event) => setCode(event.target.value)} />
-      </label>}
+      </label>
+        <button className="primary mt-3" disabled={disabled} type="submit">Connect with code</button>
+      </details>}
       <div className="actions">
-        {running
-          ? <button className="secondary" type="button" disabled={busy} onClick={() => void action('stop')}>Disconnect</button>
-          : <button className="primary" disabled={busy || scanning} type="submit">Connect</button>}
+        {running && <button className="secondary" type="button" disabled={busy} onClick={() => void action('stop')}>Disconnect</button>}
         <span className="hint">Emergency return <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F12</kbd></span>
       </div>
     </form> : <section className="panel" aria-labelledby="receiver-title">
       <h2 id="receiver-title">Allow control of this PC</h2>
-      <p className="description">Start the receiver and share its pairing code with the primary PC.</p>
+      <p className="description">Start the receiver to appear on the other PC. Confirm the request here when it arrives.</p>
       {status?.address && <div className="fact"><span>Suggested IPv4 address</span><code>{status.address}</code></div>}
-      {status?.code && <label className="field mt-4">
-        Receiver pairing code
-        <input readOnly spellCheck={false} value={status.code} onFocus={(event) => event.currentTarget.select()} />
-        <span className="hint">Copy or share the code privately. Stopping the receiver revokes it.</span>
-      </label>}
+      {status?.code && <details className="mt-3"><summary>Show manual pairing code</summary>
+        <label className="field mt-3">
+          Receiver pairing code
+          <input readOnly spellCheck={false} value={status.code} onFocus={(event) => event.currentTarget.select()} />
+          <span className="hint">Copy or share the code privately. Stopping the receiver revokes it.</span>
+        </label>
+      </details>}
       <div className="actions">
         {running
           ? <button className="secondary" type="button" disabled={busy} onClick={() => void action('stop')}>Stop receiver</button>
           : <button className="primary" type="button" disabled={busy} onClick={() => void action('listen', { shareClipboard })}>Start receiver</button>}
       </div>
     </section>}
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      <button className="secondary" type="button" disabled={busy || installing || !!approval} onClick={() => void swapRole()}>
+        {selected === 'primary' ? 'Make this PC secondary' : 'Make this PC primary'}
+      </button>
+      <span className="hint">Switch roles on both PCs and reconnect. {running && 'This ends the current session.'}</span>
+    </div>
 
     {running && <section className="mt-4 grid gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm sm:grid-cols-3"
       aria-label="Session status">

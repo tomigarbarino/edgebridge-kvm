@@ -6,6 +6,8 @@ fn main() {
             "listen",
             "connect",
             "discover",
+            "request_pairing",
+            "decide_pairing",
             "check_update",
             "install_update",
         ]),
