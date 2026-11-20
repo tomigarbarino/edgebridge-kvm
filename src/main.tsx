@@ -77,6 +77,7 @@ function App() {
   const [to, setTo] = useState<Edge>(() => savedEdge('secondary-edge', 'right'));
   const [discovered, setDiscovered] = useState<Receiver[]>([]);
   const [scanMessage, setScanMessage] = useState('');
+  const [cursorMessage, setCursorMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -190,9 +191,9 @@ function App() {
       const results = await invoke<Receiver[]>('discover');
       setDiscovered(results);
       if (results.length === 1) setAddress(results[0].address);
-      if (!results.length) setScanMessage('No available PCs found. Start the receiver on the other PC.');
+      if (!results.length) setScanMessage('No receiver replied. Check that both PCs are on the same LAN and the receiver is ready, or pair manually by IPv4.');
     } catch {
-      setScanMessage('Discovery failed. Enter the receiver’s IPv4 address below.');
+      setScanMessage('EdgeBridge could not search the LAN interfaces. Enter the receiver’s IPv4 address below.');
     } finally {
       setScanning(false);
     }
@@ -221,6 +222,16 @@ function App() {
     void action('request_pairing', {
       address: receiver.address, advertisement: receiver.advertisement, from, to, shareClipboard,
     });
+  }
+
+  async function restoreCursor() {
+    setCursorMessage('');
+    try {
+      await invoke('restore_cursor');
+      setCursorMessage('Windows cursor scheme reloaded.');
+    } catch (err) {
+      setCursorMessage(String(err));
+    }
   }
 
   return <main className="mx-auto max-w-2xl px-5 py-8 sm:px-9 sm:py-10">
@@ -343,6 +354,10 @@ function App() {
     {running && shareClipboard && status?.phase === 'connected' && <p className="hint" role="status">
       {status.clipboard_active ? 'Clipboard sharing active' : 'Clipboard sharing unavailable on this connection'}
     </p>}
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      <button type="button" className="secondary" disabled={installing} onClick={() => void restoreCursor()}>Restore cursor</button>
+      {cursorMessage && <span className="hint" role="status">{cursorMessage}</span>}
+    </div>
     <section className="mt-5 flex flex-wrap items-center gap-3" aria-label="Software updates">
       {update ? <>
         <button type="button" className="secondary" disabled={!hasStatus || disabled}

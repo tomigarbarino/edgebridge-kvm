@@ -3,5 +3,5 @@
   "description": "Read and control EdgeBridge sessions from the main local WebView.",
   "local": true,
   "webviews": ["main"],
-  "permissions": ["allow-status", "allow-stop", "allow-listen", "allow-connect", "allow-discover", "allow-request-pairing", "allow-decide-pairing", "allow-check-update", "allow-install-update"]
+  "permissions": ["allow-status", "allow-stop", "allow-listen", "allow-connect", "allow-discover", "allow-request-pairing", "allow-decide-pairing", "allow-check-update", "allow-install-update", "allow-restore-cursor"]
 }

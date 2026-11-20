@@ -10,6 +10,7 @@ fn main() {
             "decide_pairing",
             "check_update",
             "install_update",
+            "restore_cursor",
         ]),
     ))
     .expect("EdgeBridge build configuration is invalid");

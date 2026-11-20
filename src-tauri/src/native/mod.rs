@@ -1,8 +1,10 @@
 mod capture;
 mod injection;
+mod interfaces;
 
 pub use capture::Capture;
 pub use injection::WindowsDesktop;
+pub use interfaces::lan_addresses;
 
 use std::{
     cell::RefCell,
@@ -36,6 +38,19 @@ pub fn configure_dpi() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
+}
+
+#[tauri::command]
+pub fn restore_cursor() -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_SETCURSORS, SystemParametersInfoW};
+
+    if unsafe { SystemParametersInfoW(SPI_SETCURSORS, 0, null_mut(), 0) } == 0 {
+        return Err(format!(
+            "Windows could not reload its cursors. {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 fn layout() -> Arc<Layout> {

@@ -39,7 +39,8 @@ fn main() {
             service::request_pairing,
             service::decide_pairing,
             updates::check_update,
-            updates::install_update
+            updates::install_update,
+            native::restore_cursor
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
