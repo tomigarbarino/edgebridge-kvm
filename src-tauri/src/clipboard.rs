@@ -157,7 +157,15 @@ async fn send_changes(
             },
             _ => continue,
         };
-        if bytes.len() > MAX_PAYLOAD || permissions.is_some_and(|p| !p.allowed()) {
+        let permission_changed = match (&local, &remote) {
+            (Some(local), Some(remote)) => {
+                let local = local.borrow();
+                let remote = remote.borrow();
+                !*local || !*remote || local.has_changed() || remote.has_changed()
+            }
+            _ => false,
+        };
+        if bytes.len() > MAX_PAYLOAD || permission_changed {
             continue;
         }
         timeout(TRANSFER_TIMEOUT, async {
@@ -185,6 +193,7 @@ async fn receive_changes(
     permissions: Option<&Permissions>,
     remote: watch::Sender<bool>,
 ) -> Result<()> {
+    let mut local_consent = permissions.map(|p| p.local.clone());
     loop {
         // An idle clipboard channel is normal. Start the transfer deadline after the tag.
         let tag = read.read_u8().await?;
@@ -199,13 +208,17 @@ async fn receive_changes(
             continue;
         }
         let kind = Kind::try_from(tag)?;
+        let accepts = local_consent
+            .as_mut()
+            .is_none_or(|local| *local.borrow_and_update())
+            && permissions.is_none_or(|p| *p.remote.borrow());
         let bytes = timeout(TRANSFER_TIMEOUT, async {
             let size = read.read_u32().await? as usize;
             ensure!(
                 size <= MAX_PAYLOAD,
                 "Clipboard transfer exceeds the size limit"
             );
-            if permissions.is_some_and(|p| !p.allowed()) {
+            if !accepts {
                 let size = size as u64;
                 let consumed =
                     tokio::io::copy(&mut (&mut read).take(size), &mut tokio::io::sink()).await?;
@@ -225,8 +238,11 @@ async fn receive_changes(
         };
         // Hold the preference through the final OS write so disabling and
         // applying received data are ordered even while a transfer is in flight.
-        let enabled = permissions.map(|p| p.local.borrow());
-        if enabled.as_ref().is_some_and(|value| !**value) {
+        let enabled = local_consent.as_ref().map(watch::Receiver::borrow);
+        if enabled
+            .as_ref()
+            .is_some_and(|value| !**value || value.has_changed())
+        {
             continue;
         }
         let mut local = clipboard.lock().unwrap();
@@ -439,7 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_clipboard_changes_preference_without_reopening_the_stream() -> Result<()> {
-        let (mut peer, wire) = tokio::io::duplex(128);
+        let (mut peer, wire) = tokio::io::duplex(2);
         let (prefs, local) = watch::channel(false);
         let (report, mut state) = watch::channel(false);
         let exchange = exchange(wire, Some(local), |active| {
@@ -452,8 +468,8 @@ mod tests {
 
             // Malformed text sent while locally disabled must be discarded,
             // without accessing the Windows clipboard or breaking the stream.
+            // The two-byte buffer forces the earlier payload to be consumed.
             peer.write_all(&[PREFERENCE, 0, PREFERENCE, 1]).await?;
-            tokio::task::yield_now().await;
             assert!(!*state.borrow());
 
             prefs.send_replace(true);

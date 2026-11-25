@@ -89,6 +89,10 @@ fn protect(bytes: &mut [u8], encrypt: bool) -> Result<Vec<u8>> {
         if success == 0 {
             return Err(io::Error::last_os_error().into());
         }
+        ensure!(
+            !output.pbData.is_null(),
+            "Windows returned an empty credential"
+        );
         let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         LocalFree(output.pbData.cast());
         Ok(bytes)
