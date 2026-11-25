@@ -5,10 +5,13 @@ use tempfile::TempDir;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, split},
+    sync::watch,
     time::{interval, timeout},
 };
 
 pub const ALPN: &[u8] = b"edgebridge-kvm/2-clipboard";
+pub const LIVE_ALPN: &[u8] = b"edgebridge-kvm/4-live-clipboard";
+const PREFERENCE: u8 = 0;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 32;
 const MAX_NAME: usize = 255;
@@ -46,6 +49,8 @@ struct DesktopClipboard {
 pub async fn alongside(
     control: impl Future<Output = Result<()>>,
     clipboard: Option<impl AsyncRead + AsyncWrite + Unpin>,
+    local: Option<watch::Receiver<bool>>,
+    active: impl Fn(bool),
     disabled: impl FnOnce(),
 ) -> Result<()> {
     let Some(wire) = clipboard else {
@@ -54,22 +59,42 @@ pub async fn alongside(
     tokio::pin!(control);
     tokio::select! {
         result = &mut control => result,
-        _ = exchange(wire) => {
+        _ = exchange(wire, local, active) => {
             disabled();
             control.await
         }
     }
 }
 
-async fn exchange(wire: impl AsyncRead + AsyncWrite + Unpin) -> Result<()> {
+struct Permissions {
+    local: watch::Receiver<bool>,
+    remote: watch::Receiver<bool>,
+}
+
+impl Permissions {
+    fn allowed(&self) -> bool {
+        *self.local.borrow() && *self.remote.borrow()
+    }
+}
+
+async fn exchange(
+    wire: impl AsyncRead + AsyncWrite + Unpin,
+    local: Option<watch::Receiver<bool>>,
+    active: impl Fn(bool),
+) -> Result<()> {
     let clipboard = Mutex::new(DesktopClipboard {
         sequence: raw::seq_num(),
         files: None,
     });
     let (read, write) = split(wire);
+    let (remote, peer) = watch::channel(false);
+    let permissions = local.map(|local| Permissions {
+        local,
+        remote: peer,
+    });
     tokio::try_join!(
-        send_changes(write, &clipboard),
-        receive_changes(read, &clipboard)
+        send_changes(write, &clipboard, permissions.as_ref(), &active),
+        receive_changes(read, &clipboard, permissions.as_ref(), remote)
     )?;
     Ok(())
 }
@@ -77,10 +102,43 @@ async fn exchange(wire: impl AsyncRead + AsyncWrite + Unpin) -> Result<()> {
 async fn send_changes(
     mut write: impl AsyncWrite + Unpin,
     clipboard: &Mutex<DesktopClipboard>,
+    permissions: Option<&Permissions>,
+    active: &impl Fn(bool),
 ) -> Result<()> {
+    let mut local = permissions.map(|p| p.local.clone());
+    let mut remote = permissions.map(|p| p.remote.clone());
+    if let Some(local) = &mut local {
+        let enabled = *local.borrow_and_update();
+        write_preference(&mut write, enabled).await?;
+    }
     let mut ticker = interval(Duration::from_millis(120));
     loop {
-        ticker.tick().await;
+        if let (Some(local), Some(remote)) = (&mut local, &mut remote) {
+            tokio::select! {
+                biased;
+                result = local.changed() => {
+                    result?;
+                    let enabled = *local.borrow_and_update();
+                    clipboard.lock().unwrap().sequence = raw::seq_num();
+                    active(enabled && *remote.borrow());
+                    write_preference(&mut write, enabled).await?;
+                    continue;
+                }
+                result = remote.changed() => {
+                    result?;
+                    let enabled = *remote.borrow_and_update();
+                    clipboard.lock().unwrap().sequence = raw::seq_num();
+                    active(enabled && *local.borrow());
+                    continue;
+                }
+                _ = ticker.tick() => {}
+            }
+        } else {
+            ticker.tick().await;
+        }
+        if permissions.is_some_and(|p| !p.allowed()) {
+            continue;
+        }
         let content = {
             let mut local = clipboard.lock().unwrap();
             let sequence = raw::seq_num();
@@ -99,7 +157,7 @@ async fn send_changes(
             },
             _ => continue,
         };
-        if bytes.len() > MAX_PAYLOAD {
+        if bytes.len() > MAX_PAYLOAD || permissions.is_some_and(|p| !p.allowed()) {
             continue;
         }
         timeout(TRANSFER_TIMEOUT, async {
@@ -112,29 +170,65 @@ async fn send_changes(
     }
 }
 
+async fn write_preference(write: &mut (impl AsyncWrite + Unpin), enabled: bool) -> Result<()> {
+    timeout(TRANSFER_TIMEOUT, async {
+        write.write_all(&[PREFERENCE, u8::from(enabled)]).await?;
+        write.flush().await
+    })
+    .await??;
+    Ok(())
+}
+
 async fn receive_changes(
     mut read: impl AsyncRead + Unpin,
     clipboard: &Mutex<DesktopClipboard>,
+    permissions: Option<&Permissions>,
+    remote: watch::Sender<bool>,
 ) -> Result<()> {
     loop {
         // An idle clipboard channel is normal. Start the transfer deadline after the tag.
-        let kind = Kind::try_from(read.read_u8().await?)?;
+        let tag = read.read_u8().await?;
+        if tag == PREFERENCE && permissions.is_some() {
+            let value = timeout(TRANSFER_TIMEOUT, read.read_u8()).await??;
+            ensure!(value <= 1, "Invalid clipboard preference");
+            remote.send_if_modified(|enabled| {
+                let changed = *enabled != (value == 1);
+                *enabled = value == 1;
+                changed
+            });
+            continue;
+        }
+        let kind = Kind::try_from(tag)?;
         let bytes = timeout(TRANSFER_TIMEOUT, async {
             let size = read.read_u32().await? as usize;
             ensure!(
                 size <= MAX_PAYLOAD,
                 "Clipboard transfer exceeds the size limit"
             );
+            if permissions.is_some_and(|p| !p.allowed()) {
+                let size = size as u64;
+                let consumed =
+                    tokio::io::copy(&mut (&mut read).take(size), &mut tokio::io::sink()).await?;
+                ensure!(consumed == size, "Incomplete clipboard transfer");
+                return Ok(None);
+            }
             let mut bytes = vec![0; size];
             read.read_exact(&mut bytes).await?;
-            Ok::<_, anyhow::Error>(bytes)
+            Ok::<_, anyhow::Error>(Some(bytes))
         })
         .await??;
+        let Some(bytes) = bytes else { continue };
         let files = if kind == Kind::Files {
             Some(stage_files(&bytes).await?)
         } else {
             None
         };
+        // Hold the preference through the final OS write so disabling and
+        // applying received data are ordered even while a transfer is in flight.
+        let enabled = permissions.map(|p| p.local.borrow());
+        if enabled.as_ref().is_some_and(|value| !**value) {
+            continue;
+        }
         let mut local = clipboard.lock().unwrap();
         match kind {
             Kind::Text => {
@@ -342,6 +436,44 @@ async fn stage_files(bytes: &[u8]) -> Result<(TempDir, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn live_clipboard_changes_preference_without_reopening_the_stream() -> Result<()> {
+        let (mut peer, wire) = tokio::io::duplex(128);
+        let (prefs, local) = watch::channel(false);
+        let (report, mut state) = watch::channel(false);
+        let exchange = exchange(wire, Some(local), |active| {
+            report.send_replace(active);
+        });
+        let peer_actions = async {
+            assert_eq!(peer.read_u16().await?, 0);
+            peer.write_all(&[PREFERENCE, 1, Kind::Text as u8, 0, 0, 0, 1, 0])
+                .await?;
+
+            // Malformed text sent while locally disabled must be discarded,
+            // without accessing the Windows clipboard or breaking the stream.
+            peer.write_all(&[PREFERENCE, 0, PREFERENCE, 1]).await?;
+            tokio::task::yield_now().await;
+            assert!(!*state.borrow());
+
+            prefs.send_replace(true);
+            assert_eq!(peer.read_u16().await?, 1);
+            state.wait_for(|active| *active).await?;
+            assert!(*state.borrow());
+
+            prefs.send_replace(false);
+            assert_eq!(peer.read_u16().await?, 0);
+            assert!(!*state.borrow());
+            Ok::<_, anyhow::Error>(())
+        };
+        timeout(Duration::from_secs(3), async {
+            tokio::select! {
+                result = exchange => bail!("Clipboard stream ended early: {result:?}"),
+                result = peer_actions => result,
+            }
+        })
+        .await?
+    }
 
     #[test]
     fn rejects_paths_devices_and_unsafe_sizes() {

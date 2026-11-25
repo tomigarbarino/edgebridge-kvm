@@ -17,7 +17,11 @@ use crate::protocol::Token;
 const PREFIX: &str = "EB1-";
 const ALPN: &[u8] = b"edgebridge-kvm/1";
 pub const APPROVAL_ALPN: &[u8] = b"edgebridge-kvm/3-approval";
+pub const TRUST_ALPN: &[u8] = b"edgebridge-kvm/5-trust";
 pub const APPROVAL_EXPORTER: &[u8] = b"EXPORTER-EdgeBridge-pairing-confirmation";
+pub const TRUST_SECRET: &[u8] = b"EXPORTER-EdgeBridge-device-secret";
+pub const TRUST_RECEIVER: &[u8] = b"EXPORTER-EdgeBridge-remembered-receiver";
+pub const TRUST_SENDER: &[u8] = b"EXPORTER-EdgeBridge-remembered-sender";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Invite {

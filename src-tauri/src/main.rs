@@ -20,6 +20,8 @@ mod service;
 mod session_health;
 mod state;
 #[cfg(windows)]
+mod trust;
+#[cfg(windows)]
 mod updates;
 
 #[cfg(windows)]
@@ -31,9 +33,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updates::Updates::default())
-        .manage(Arc::new(service::Shared::default()))
+        .setup(|app| {
+            let path = app.path().app_local_data_dir()?.join("trusted-peer.bin");
+            app.manage(Arc::new(service::Shared::with_trust(path)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             service::status,
+            service::set_clipboard_sharing,
             service::stop,
             service::listen,
             service::connect,
@@ -42,6 +49,8 @@ fn main() {
             diagnostics::copy_connection_diagnostic,
             service::request_pairing,
             service::decide_pairing,
+            service::trusted_device,
+            service::forget_device,
             updates::check_update,
             updates::install_update,
             native::restore_cursor

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
@@ -10,7 +10,7 @@ type Edge = 'left' | 'right' | 'top' | 'bottom';
 type Phase = 'idle' | 'starting' | 'waiting' | 'connected' | 'reconnecting' | 'stopping' | 'error';
 type Advertisement = { name: string; pin: number[] };
 type Receiver = { address: string; advertisement: Advertisement | null };
-type Approval = { id: number; name: string; comparison: string; accepted: boolean };
+type Approval = { id: number; name: string; comparison: string; accepted: boolean; can_remember: boolean };
 type Status = {
   phase: Phase;
   role: Role | null;
@@ -20,6 +20,7 @@ type Status = {
   latency_ms: number | null;
   forwarding: boolean;
   clipboard_active: boolean;
+  clipboard_live: boolean;
   approval: Approval | null;
   message: string | null;
 };
@@ -71,7 +72,12 @@ function EdgeField({ label, value, change, disabled }: {
 function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [shareClipboard, setShareClipboard] = useState(false);
+  const [trustedDevice, setTrustedDevice] = useState<string | null>(null);
+  const [trustError, setTrustError] = useState('');
+  const [rememberApproval, setRememberApproval] = useState<number | null>(null);
   const [role, setRole] = useState<Role>(() => localStorage.getItem('role') === 'secondary' ? 'secondary' : 'primary');
+  const [startReceiverOnOpen, setStartReceiverOnOpen] = useState(() => localStorage.getItem('start-receiver-on-open') === 'yes');
+  const receiverStartupChecked = useRef(false);
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
   const [from, setFrom] = useState<Edge>(() => savedEdge('primary-edge', 'left'));
@@ -91,6 +97,8 @@ function App() {
   const selected = status?.role ?? role;
   const disabled = running || busy || installing;
   const approval = status?.approval;
+  const connected = status?.phase === 'connected';
+  const liveClipboard = connected && status.clipboard_live;
 
   useEffect(() => {
     let alive = true;
@@ -110,11 +118,58 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!hasStatus) return;
+    let alive = true;
+    void refreshTrustedDevice(() => alive);
+    return () => { alive = false; };
+  }, [hasStatus, status?.phase]);
+
+  async function refreshTrustedDevice(isCurrent = () => true) {
+    try {
+      const name = await invoke<string | null>('trusted_device');
+      if (isCurrent()) { setTrustedDevice(name); setTrustError(''); }
+    } catch (err) {
+      if (isCurrent()) setTrustError(String(err));
+    }
+  }
+
+  async function forgetDevice() {
+    try {
+      await invoke('forget_device');
+      await refreshTrustedDevice();
+    } catch (err) { setTrustError(String(err)); }
+  }
+
+  async function changeClipboard(enabled: boolean) {
+    if (liveClipboard) {
+      setBusy(true);
+      setError('');
+      try {
+        await invoke('set_clipboard_sharing', { enabled });
+        setShareClipboard(enabled);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      setShareClipboard(enabled);
+    }
+  }
+
+  useEffect(() => {
     localStorage.setItem('primary-edge', from);
     localStorage.setItem('secondary-edge', to);
   }, [from, to]);
 
   useEffect(() => { localStorage.setItem('role', role); }, [role]);
+  useEffect(() => {
+    if (!hasStatus || receiverStartupChecked.current) return;
+    receiverStartupChecked.current = true;
+    if (role === 'secondary' && startReceiverOnOpen && !running) {
+      void action('listen', { shareClipboard });
+    }
+  }, [hasStatus, role, running, shareClipboard, startReceiverOnOpen]);
 
   useEffect(() => {
     if (running || !hasStatus) return;
@@ -252,9 +307,10 @@ function App() {
     </div>
 
     <label className="mb-4 flex items-center gap-2 text-sm">
-      <input type="checkbox" className="clipboard-toggle" checked={shareClipboard} disabled={disabled}
-        onChange={(event) => setShareClipboard(event.target.checked)} />
-      Share clipboard on both PCs
+      <input type="checkbox" className="clipboard-toggle" checked={shareClipboard}
+        disabled={busy || installing || (running && !liveClipboard)}
+        onChange={(event) => void changeClipboard(event.target.checked)} />
+      Allow clipboard sharing on this PC
     </label>
     {approval && <section className="panel mb-4" aria-labelledby="approval-title">
       <h2 id="approval-title">Pair with {approval.name}?</h2>
@@ -262,11 +318,16 @@ function App() {
       <p className="comparison" aria-label={`Pairing number ${approval.comparison.split('').join(' ')}`}>
         {approval.comparison.slice(0, 4)} {approval.comparison.slice(4)}
       </p>
+      {approval.can_remember && !approval.accepted && <label className="mb-4 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={rememberApproval === approval.id}
+          onChange={(event) => setRememberApproval(event.target.checked ? approval.id : null)} />
+        Remember this PC for future connections
+      </label>}
       {approval.accepted ? <p className="hint" role="status">Waiting for the other PC to accept.</p> : <div className="actions">
         <button className="primary" type="button" disabled={busy} onClick={() =>
-          void action('decide_pairing', { id: approval.id, accept: true })}>Numbers match</button>
+          void action('decide_pairing', { id: approval.id, accept: true, remember: rememberApproval === approval.id })}>Numbers match</button>
         <button className="secondary" type="button" disabled={busy} onClick={() =>
-          void action('decide_pairing', { id: approval.id, accept: false })}>Decline</button>
+          void action('decide_pairing', { id: approval.id, accept: false, remember: false })}>Decline</button>
       </div>}
     </section>}
     {selected === 'secondary' && !running && discovered.some((pc) => pc.advertisement) &&
@@ -280,7 +341,7 @@ function App() {
       {!running && <div className="actions">
         {discovered.map((pc) => pc.advertisement && <button className="primary" key={pc.address}
           type="button" disabled={disabled} onClick={() => requestPairing(pc)}>
-          Pair with {pc.advertisement.name} <small>({pc.address})</small>
+          {pc.advertisement.name === trustedDevice ? 'Connect to' : 'Pair with'} {pc.advertisement.name} <small>({pc.address})</small>
         </button>)}
         <button className="secondary" type="button" disabled={disabled || scanning} onClick={() => void scan()}>
           {scanning ? 'Scanning…' : 'Find on Wi-Fi'}
@@ -324,7 +385,15 @@ function App() {
       </div>
     </form> : <section className="panel" aria-labelledby="receiver-title">
       <h2 id="receiver-title">Allow control of this PC</h2>
-      <p className="description">Start the receiver to appear on the other PC. Confirm the request here when it arrives.</p>
+      <p className="description">Start the receiver to appear on the other PC. First-time pairing requires confirmation.</p>
+      <label className="mb-4 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={startReceiverOnOpen} onChange={(event) => {
+          const enabled = event.target.checked;
+          setStartReceiverOnOpen(enabled);
+          localStorage.setItem('start-receiver-on-open', enabled ? 'yes' : 'no');
+        }} />
+        Start receiver when EdgeBridge opens
+      </label>
       {status?.address && <div className="fact"><span>Suggested IPv4 address</span><code>{status.address}</code></div>}
       {status?.code && <details className="mt-3"><summary>Show manual pairing code</summary>
         <label className="field mt-3">
@@ -339,6 +408,13 @@ function App() {
           : <button className="primary" type="button" disabled={busy} onClick={() => void action('listen', { shareClipboard })}>Start receiver</button>}
       </div>
     </section>}
+    {(trustedDevice || trustError) && <div className="mt-3 flex flex-wrap items-center gap-2">
+      {trustedDevice && <span className="hint">Remembered PC: {trustedDevice}</span>}
+      {trustError && <span className="hint" role="status">{trustError}</span>}
+      <button className="secondary" type="button" disabled={disabled} onClick={() => void forgetDevice()}>
+        Forget PC
+      </button>
+    </div>}
     <ConnectionDiagnostics key={selected} primary={selected === 'primary'}
       connected={status?.phase === 'connected'} disabled={!hasStatus || busy || installing} />
     <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -354,8 +430,10 @@ function App() {
       <div><span className="metric">Peer</span><strong>{status?.peer ?? '—'}</strong></div>
       <div><span className="metric">LAN round trip</span><strong>{status?.latency_ms == null ? '—' : status.latency_ms + ' ms'}</strong></div>
     </section>}
-    {running && shareClipboard && status?.phase === 'connected' && <p className="hint" role="status">
-      {status.clipboard_active ? 'Clipboard sharing active' : 'Clipboard sharing unavailable on this connection'}
+    {connected && <p className="hint" role="status">
+      {status.clipboard_active ? 'Clipboard sharing active' : liveClipboard
+        ? (shareClipboard ? 'Waiting for the other PC to allow clipboard sharing' : 'Clipboard sharing off on this PC')
+        : 'Live clipboard settings unavailable on this connection'}
     </p>}
     <div className="mt-4 flex flex-wrap items-center gap-2">
       <button type="button" className="secondary" disabled={installing} onClick={() => void restoreCursor()}>Restore cursor</button>

@@ -5,6 +5,8 @@
 - Fixed-size wire frames round-trip in order. Unknown, malformed, and truncated frames are rejected.
 - A localhost TLS session accepts the invitation, reconnects, rejects a different receiver certificate, and rejects a wrong token under the correct certificate.
 - A localhost discovery test checks both the original address response and the name and fingerprint response. A TLS test compares the two visual codes, verifies that one approval cannot issue a credential, rejects a declined request, and connects with the credential issued after both approve.
+- A localhost TLS test confirms that both approvals can persist a device credential across restarts and fresh certificates, and rejects a PC using the same name with a different credential. The Windows trust store test verifies persistence and revocation.
+- A duplex clipboard test changes consent on an open channel and discards a payload received while sharing is off.
 - Discovery tests check subnet broadcast calculations and successful discovery when a different source interface cannot bind. The legacy and named replies for the same receiver resolve to one PC.
 - Diagnostic tests distinguish a reachable TCP socket from a closed port and confirm that reports omit pairing secrets, names, addresses, and raw errors.
 - Geometry tests verify the default primary-left to secondary-right route, the return path, proportional placement, and vertical configurations.
@@ -23,6 +25,8 @@ Use two Windows PCs on the same private Wi-Fi. Put the primary PC on the right, 
 | Case | Expected result |
 | --- | --- |
 | Discover the secondary and pair | The primary displays the secondary's name. A request shows the same number on both PCs. Both show connected only after both confirmations, and the primary displays LAN RTT. |
+| Remember the other PC and reopen both apps | First pair with **Remember this PC for future connections** selected on both. Choose **Connect to** from the primary after restarting the receiver. No numbers appear. Swap roles and repeat. Stop the session, choose **Forget PC** on either device, and check that the next connection requires numbers again. |
+| Enable and disable clipboard sharing during an active connection | Start with sharing off on both PCs. Enable it on one PC and check that copying fresh text stays local. Enable it on the other and check fresh text in both directions. Turn it off on either PC and check that sharing stops while mouse and keyboard continue working. |
 | Discover with a Hyper-V virtual adapter and Wi-Fi | With the receiver on Wi-Fi, the primary still finds it while the limited broadcast route prefers Hyper-V. Compare with sending a subnet broadcast from the Wi-Fi address. |
 | Decline or ignore a pairing request | The pending prompt clears and the receiver stays available for a fresh request. |
 | Incorrect code and manual IPv4 | The wrong code cannot control the secondary. With the correct code, manual IPv4 works even when broadcast discovery is unavailable. |

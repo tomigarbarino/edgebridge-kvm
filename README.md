@@ -13,14 +13,16 @@ Move the cursor to the **left edge of the primary PC**. It enters near the right
 ## Install and pair
 
 1. On each PC, run the x64 setup executable from [Releases](../../releases). Use Windows 11 x64 with Microsoft Edge WebView2 and a mouse that reports relative movement. Keep the app open on both PCs.
-2. On the PC you want to control, select **Secondary PC**, then **Start receiver**. If Windows Firewall prompts, allow EdgeBridge on private networks. Turn on clipboard sharing on both PCs before connecting if you want to use it.
+2. On the PC you want to control, select **Secondary PC**, then **Start receiver**. If Windows Firewall prompts, allow EdgeBridge on private networks. Select **Start receiver when EdgeBridge opens** if you want it ready on future app launches.
 3. On the PC whose mouse and keyboard you want to use, select **Primary PC**. Set where the secondary sits with **Left**, **Right**, **Above**, or **Below**, then select **Pair with** and the other PC’s name.
-4. With v0.4.0 or later on both PCs, compare the eight digits shown on both screens. Select **Numbers match** on both PCs if the numbers match.
+4. With v0.4.0 or later on both PCs, compare the eight digits shown on both screens. Select **Numbers match** on both PCs if the numbers match. On v0.5.0 or later, select **Remember this PC for future connections** on both to skip the number check on later connections.
 5. Check that both PCs show **Connected**. The primary PC displays the measured LAN round-trip time. Use **Disconnect** or **Stop receiver** to end the session.
 
 If discovery is unavailable or one PC is on an older version, use **Show manual pairing code** on the secondary and **Manual pairing and custom edges** on the primary. Enter the secondary’s IPv4 address and its pairing code privately, then select **Connect with code**. The secondary shows a suggested IPv4 address when available.
 
-To change which mouse and keyboard are shared, use **Make this PC primary** on one PC and **Make this PC secondary** on the other. This ends the active session on each PC. Start the new receiver, check the layout on the new primary, and pair again. Roles and edges are saved locally.
+For a remembered device, select **Connect to** and its name while its receiver is ready. EdgeBridge stores one remembered PC per Windows user. The two PCs prove possession of the saved credential across fresh TLS sessions. The device name helps find the saved entry. To revoke trust, stop the session on the PC where you want to revoke it and select **Forget PC**.
+
+To change which mouse and keyboard are shared, use **Make this PC primary** on one PC and **Make this PC secondary** on the other. This ends the active session on each PC. Start the new receiver, check the layout on the new primary, and connect again. A remembered PC works with either role. Roles and edges are saved locally.
 
 If pairing stalls, select **Diagnose connection** on either PC. The primary tests LAN discovery by interface and checks TCP port 46387 when it finds one receiver or you enter an IPv4 address. The secondary reports whether its receiver and discovery are listening. If approval is in progress or the PCs are connected, the diagnostic reports that state without sending test traffic. **Copy diagnostic** includes the app version, role and test results. Pairing codes, device names and IP addresses are omitted.
 
@@ -49,15 +51,16 @@ Ask me which option applies if I leave either choice open.
    the x64 setup and SHA256SUMS.txt and verify the setup with Get-FileHash
    -Algorithm SHA256. If the checksum matches, close EdgeBridge and run the
    setup. If a session is active, let me know before disconnecting it.
-2. Open EdgeBridge and verify the installed version. If I want clipboard
-   sharing, enable Share clipboard on both PCs on each computer before
-   starting the receiver or connecting.
+2. Open EdgeBridge and verify the installed version.
 3. On the secondary PC, select Secondary PC and Start receiver.
    On the primary PC, select Primary PC, choose the secondary's position
    and select Pair with the other PC's name. Ask me to compare the number
-   on both screens before accepting on each PC. If this option is absent,
-   use manual pairing and let me enter the pairing code directly in the app.
-4. Confirm Connected on both PCs. If sharing is enabled, confirm
+   on both screens before accepting on each PC for first-time pairing.
+   If I want to trust these PCs for later sessions, select Remember this PC
+   for future connections on both. Use Connect to for a remembered PC.
+   If discovery is unavailable, let me enter the manual code in the app.
+4. Confirm Connected on both PCs. If I want clipboard sharing, enable
+   Allow clipboard sharing on this PC on both computers, then confirm
    Clipboard sharing active and test with fresh text between two Notepad windows.
 
 If you can operate only one PC, set up that PC and tell me where to continue
@@ -67,12 +70,9 @@ the steps. Tell me which checks actually passed.
 
 ## Share clipboard
 
-1. Run EdgeBridge v0.3.0 or later on both PCs. If already connected, select **Disconnect** on the primary PC and **Stop receiver** on the secondary PC.
-2. Turn on **Share clipboard on both PCs** on each PC. The checkbox starts unchecked when the app opens and is locked while the sender or receiver is running.
-3. On the secondary PC, select **Start receiver**. Use its new pairing code to reconnect from the primary PC.
-4. Confirm that EdgeBridge shows **Clipboard sharing active**. Copy fresh text with Ctrl+C, switch PCs, then paste into Notepad with Ctrl+V.
+With v0.5.0 or later on both PCs, turn on **Allow clipboard sharing on this PC** on each computer before or during the connection. Turn it off on either PC to pause sharing while keeping the mouse and keyboard connected. The checkbox starts off each time the app opens. When **Clipboard sharing active** appears, copy fresh text with Ctrl+C and paste it on the other PC with Ctrl+V.
 
-**Connected** confirms the mouse and keyboard session. If **Clipboard sharing active** is missing or EdgeBridge says **Clipboard sharing unavailable on this connection**, check the version and checkbox on both PCs, then restart the receiver and reconnect. Copy again after sharing becomes active to send the new clipboard contents.
+With a PC on v0.3.0 through v0.4.4, set the clipboard option on both PCs before connecting. Reconnect to change the setting on those versions.
 
 Clipboard sharing sends Unicode text, compatible Windows bitmap images and up to 32 regular files copied from a local drive. Each transfer can be up to 64 MiB. Folders, cloud placeholders and network paths are outside this version. Paste files before disconnecting. The receiving PC makes a temporary copy so Explorer can paste it into the chosen destination.
 

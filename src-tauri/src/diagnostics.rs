@@ -156,6 +156,7 @@ mod tests {
                 name: "Private-PC".into(),
                 comparison: "12345678".into(),
                 accepted: false,
+                can_remember: false,
             }),
             ..Status::default()
         };

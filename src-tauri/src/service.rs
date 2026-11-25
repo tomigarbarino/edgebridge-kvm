@@ -3,9 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{discovery, network, pairing::Invite, protocol::Edge};
+use crate::{discovery, network, pairing::Invite, protocol::Edge, trust};
 use serde::Serialize;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 #[derive(Clone, Serialize)]
 pub struct Approval {
@@ -13,6 +13,12 @@ pub struct Approval {
     pub name: String,
     pub comparison: String,
     pub accepted: bool,
+    pub can_remember: bool,
+}
+
+pub struct Decision {
+    pub accepted: bool,
+    pub remember: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -25,6 +31,7 @@ pub struct Status {
     pub latency_ms: Option<u32>,
     pub forwarding: bool,
     pub clipboard_active: bool,
+    pub clipboard_live: bool,
     pub discovery_listening: bool,
     pub approval: Option<Approval>,
     pub message: Option<String>,
@@ -41,6 +48,7 @@ impl Default for Status {
             latency_ms: None,
             forwarding: false,
             clipboard_active: false,
+            clipboard_live: false,
             discovery_listening: false,
             approval: None,
             message: None,
@@ -55,13 +63,31 @@ struct State {
     task: Option<tauri::async_runtime::JoinHandle<()>>,
     status: Status,
     next_approval: u32,
-    decision: Option<oneshot::Sender<bool>>,
+    decision: Option<oneshot::Sender<Decision>>,
 }
 
 #[derive(Default)]
-pub struct Shared(Mutex<State>, tokio::sync::Mutex<()>);
+pub struct Shared(
+    Mutex<State>,
+    tokio::sync::Mutex<()>,
+    watch::Sender<bool>,
+    pub trust::Store,
+);
 
 impl Shared {
+    pub fn with_trust(path: std::path::PathBuf) -> Self {
+        Self(
+            Mutex::default(),
+            tokio::sync::Mutex::default(),
+            watch::Sender::default(),
+            trust::Store::new(path),
+        )
+    }
+
+    pub fn clipboard_preference(&self) -> watch::Receiver<bool> {
+        self.2.subscribe()
+    }
+
     pub fn snapshot(&self) -> Status {
         self.0.lock().unwrap().status.clone()
     }
@@ -73,22 +99,24 @@ impl Shared {
             && state.status.approval.is_none()
     }
 
-    pub fn decide(&self, id: u32, accept: bool) -> Result<(), String> {
+    pub fn decide(&self, id: u32, accept: bool, remember: bool) -> Result<(), String> {
         let mut state = self.0.lock().unwrap();
-        if state
+        let approval = state
             .status
             .approval
             .as_ref()
-            .is_none_or(|approval| approval.id != id)
-        {
-            return Err("This pairing request has expired.".into());
-        }
+            .filter(|approval| approval.id == id)
+            .ok_or("This pairing request has expired.")?;
+        let remember = accept && remember && approval.can_remember;
         let sender = state
             .decision
             .take()
             .ok_or("This request was already answered.")?;
         sender
-            .send(accept)
+            .send(Decision {
+                accepted: accept,
+                remember,
+            })
             .map_err(|_| "This pairing request has expired.")?;
         if let Some(approval) = &mut state.status.approval {
             approval.accepted = accept;
@@ -101,7 +129,8 @@ impl Shared {
         generation: u64,
         name: String,
         comparison: String,
-    ) -> anyhow::Result<(ApprovalGuard<'_>, oneshot::Receiver<bool>)> {
+        can_remember: bool,
+    ) -> anyhow::Result<(ApprovalGuard<'_>, oneshot::Receiver<Decision>)> {
         let mut state = self.0.lock().unwrap();
         anyhow::ensure!(
             state.generation == generation && state.status.approval.is_none(),
@@ -116,6 +145,7 @@ impl Shared {
             name,
             comparison,
             accepted: false,
+            can_remember,
         });
         Ok((
             ApprovalGuard {
@@ -137,6 +167,7 @@ impl Shared {
     fn launch<F>(
         self: &Arc<Self>,
         role: &'static str,
+        share_clipboard: bool,
         execute: impl FnOnce(Arc<Self>, u64) -> F + Send + 'static,
     ) -> Result<(), String>
     where
@@ -150,6 +181,7 @@ impl Shared {
             return Err("Stop the current session first.".into());
         }
         state.generation = state.generation.wrapping_add(1);
+        self.2.send_replace(share_clipboard);
         let generation = state.generation;
         state.status = Status {
             phase: "starting",
@@ -239,6 +271,19 @@ pub fn status(shared: tauri::State<'_, Arc<Shared>>) -> Status {
 }
 
 #[tauri::command]
+pub fn set_clipboard_sharing(
+    shared: tauri::State<'_, Arc<Shared>>,
+    enabled: bool,
+) -> Result<(), String> {
+    let state = shared.0.lock().unwrap();
+    if state.status.phase != "connected" || !state.status.clipboard_live {
+        return Err("Live clipboard sharing requires an active connection on both PCs.".into());
+    }
+    shared.2.send_replace(enabled);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn stop(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
     shared.stop().await;
     Ok(())
@@ -248,7 +293,7 @@ pub async fn stop(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
 pub fn listen(shared: tauri::State<'_, Arc<Shared>>, share_clipboard: bool) -> Result<(), String> {
     shared
         .inner()
-        .launch("secondary", move |shared, generation| {
+        .launch("secondary", share_clipboard, move |shared, generation| {
             network::listen(shared, generation, share_clipboard)
         })
 }
@@ -270,9 +315,11 @@ pub fn connect(
         return Err("Enter the IPv4 address of the other computer.".into());
     }
     let invite = Invite::parse(&code).map_err(|_| "The pairing code is invalid.")?;
-    shared.inner().launch("primary", move |shared, generation| {
-        network::send(shared, generation, ip, invite, (from, to), share_clipboard)
-    })
+    shared
+        .inner()
+        .launch("primary", share_clipboard, move |shared, generation| {
+            network::send(shared, generation, ip, invite, (from, to), share_clipboard)
+        })
 }
 
 #[tauri::command]
@@ -285,8 +332,30 @@ pub fn decide_pairing(
     shared: tauri::State<'_, Arc<Shared>>,
     id: u32,
     accept: bool,
+    remember: bool,
 ) -> Result<(), String> {
-    shared.decide(id, accept)
+    shared.decide(id, accept, remember)
+}
+
+#[tauri::command]
+pub fn trusted_device(shared: tauri::State<'_, Arc<Shared>>) -> Result<Option<String>, String> {
+    shared
+        .3
+        .load()
+        .map(|peer| peer.map(|peer| peer.name))
+        .map_err(|_| "Could not read the remembered PC. You can forget it and pair again.".into())
+}
+
+#[tauri::command]
+pub fn forget_device(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    let state = shared.0.lock().unwrap();
+    if state.status.role.is_some() || state.status.phase == "stopping" {
+        return Err("Stop the current session before forgetting the PC.".into());
+    }
+    shared
+        .3
+        .forget()
+        .map_err(|_| "Could not forget the remembered PC.".into())
 }
 
 #[tauri::command]
@@ -306,16 +375,18 @@ pub fn request_pairing(
     {
         return Err("Choose a valid PC on the network.".into());
     }
-    shared.inner().launch("primary", move |shared, generation| {
-        network::request_pairing(
-            shared,
-            generation,
-            address,
-            advertisement,
-            (from, to),
-            share_clipboard,
-        )
-    })
+    shared
+        .inner()
+        .launch("primary", share_clipboard, move |shared, generation| {
+            network::request_pairing(
+                shared,
+                generation,
+                address,
+                advertisement,
+                (from, to),
+                share_clipboard,
+            )
+        })
 }
 
 #[cfg(test)]
@@ -328,7 +399,11 @@ mod tests {
         {
             let _install = shared.reserve_install().expect("idle app can update");
             assert!(shared.reserve_install().is_err());
-            assert!(shared.launch("primary", |_, _| async { Ok(()) }).is_err());
+            assert!(
+                shared
+                    .launch("primary", false, |_, _| async { Ok(()) })
+                    .is_err()
+            );
         }
         shared.0.lock().unwrap().status.role = Some("primary");
         assert!(shared.reserve_install().is_err());

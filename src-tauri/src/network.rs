@@ -22,12 +22,15 @@ use crate::{
     receiver::{Desktop, Receiver},
     service::Shared,
     session_health::{DEADLINE, Heartbeat, QueuedFrame},
+    trust::Peer,
 };
 
 const HANDSHAKE: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_millis(250);
 const MAX_HANDSHAKES: usize = 8;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(45);
+const APPROVE: u8 = 1;
+const REMEMBER: u8 = 2;
 
 struct ServerApproval {
     shared: Arc<Shared>,
@@ -44,10 +47,14 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
         name: discovery::computer_name(),
         pin: Invite::parse(&code)?.pin(),
     };
+    config.alpn_protocols.push(pairing::TRUST_ALPN.to_vec());
     config.alpn_protocols.push(pairing::APPROVAL_ALPN.to_vec());
     if share_clipboard {
         config.alpn_protocols.insert(0, clipboard::ALPN.to_vec());
     }
+    config
+        .alpn_protocols
+        .insert(0, clipboard::LIVE_ALPN.to_vec());
     let acceptor = TlsAcceptor::from(Arc::new(config));
     // Manual IPv4 connection remains available if UDP is occupied or disabled.
     let udp = discovery::socket().await.ok();
@@ -74,17 +81,28 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
                 Ok(side) => side,
                 Err(_) => continue,
             };
+            let live = wire.get_ref().1.alpn_protocol() == Some(clipboard::LIVE_ALPN);
+            let preference = shared.clipboard_preference();
+            let side = side.filter(|_| live || *preference.borrow());
             shared.update(generation, |status| {
                 status.phase = "connected";
                 status.peer = Some(address.ip().to_string());
-                status.clipboard_active = side.is_some();
+                status.clipboard_live = live && side.is_some();
+                status.clipboard_active = !live && side.is_some();
             });
             let result = clipboard::alongside(
                 receive(wire, WindowsDesktop, |active| {
                     shared.update(generation, |status| status.forwarding = active);
                 }),
                 side,
-                || shared.update(generation, |status| status.clipboard_active = false),
+                live.then_some(preference),
+                |active| shared.update(generation, |status| status.clipboard_active = active),
+                || {
+                    shared.update(generation, |status| {
+                        status.clipboard_active = false;
+                        status.clipboard_live = false;
+                    })
+                },
             )
             .await;
             shared.update(generation, |status| {
@@ -92,6 +110,7 @@ pub async fn listen(shared: Arc<Shared>, generation: u64, share_clipboard: bool)
                 status.peer = None;
                 status.forwarding = false;
                 status.clipboard_active = false;
+                status.clipboard_live = false;
                 status.message = result.err().map(|err| err.to_string());
             });
         }
@@ -122,7 +141,7 @@ async fn server_clipboard(
     listener: &TcpListener,
     acceptor: &TlsAcceptor,
 ) -> Result<Option<PeerStream>> {
-    if wire.get_ref().1.alpn_protocol() != Some(clipboard::ALPN) {
+    if !has_clipboard(wire.get_ref().1.alpn_protocol()) {
         return Ok(None);
     }
     let mut channel_key = [0; 32];
@@ -143,6 +162,10 @@ async fn server_clipboard(
     })
     .await??;
     Ok(side)
+}
+
+fn has_clipboard(protocol: Option<&[u8]>) -> bool {
+    protocol == Some(clipboard::ALPN) || protocol == Some(clipboard::LIVE_ALPN)
 }
 
 async fn accept_peer(
@@ -177,7 +200,8 @@ async fn accept_connections(
                 let approval = approval.cloned();
                 handshakes.spawn(async move {
                     let mut wire = timeout(HANDSHAKE, accept_secure(stream, &acceptor)).await.ok()?.ok()?;
-                    if wire.get_ref().1.alpn_protocol() == Some(pairing::APPROVAL_ALPN) {
+                    if matches!(wire.get_ref().1.alpn_protocol(), Some(protocol)
+                        if protocol == pairing::APPROVAL_ALPN || protocol == pairing::TRUST_ALPN) {
                         if let Some(approval) = approval {
                             let _ = timeout(APPROVAL_TIMEOUT, approve_connection(wire, &approval)).await;
                         }
@@ -215,25 +239,82 @@ async fn approve_connection(mut wire: PeerStream, approval: &ServerApproval) -> 
         Ok::<_, anyhow::Error>(name)
     })
     .await??;
+    let can_remember = wire.get_ref().1.alpn_protocol() == Some(pairing::TRUST_ALPN);
+    if can_remember {
+        let offer = timeout(HANDSHAKE, wire.read_u8()).await??;
+        ensure!(offer <= 1, "Invalid device trust offer");
+        if offer == 1
+            && let Some(peer) = approval.shared.3.load().ok().flatten()
+            && peer.name == name
+        {
+            return timeout(HANDSHAKE, reconnect_remembered(wire, approval, peer.secret)).await?;
+        }
+    }
     let comparison =
         wire.get_ref()
             .1
             .export_keying_material([0; 8], pairing::APPROVAL_EXPORTER, None)?;
-    let (_prompt, decision) =
-        approval
-            .shared
-            .prompt(approval.generation, name, pairing::confirmation(comparison))?;
-    wire.write_u8(1).await?;
+    let (_prompt, decision) = approval.shared.prompt(
+        approval.generation,
+        name.clone(),
+        pairing::confirmation(comparison),
+        can_remember,
+    )?;
+    wire.write_u8(APPROVE).await?;
     wire.flush().await?;
     let remote = async {
-        ensure!(wire.read_u8().await? == 1, "Pairing declined");
-        Ok::<_, anyhow::Error>(())
+        let value = wire.read_u8().await?;
+        ensure!(
+            value == APPROVE || (can_remember && value == REMEMBER),
+            "Pairing declined"
+        );
+        Ok::<_, anyhow::Error>(value == REMEMBER)
     };
     let local = async {
-        ensure!(decision.await?, "Pairing declined");
-        Ok::<_, anyhow::Error>(())
+        let decision = decision.await?;
+        ensure!(decision.accepted, "Pairing declined");
+        Ok::<_, anyhow::Error>(decision.remember)
     };
-    tokio::try_join!(remote, local)?;
+    let (remote, local) = tokio::try_join!(remote, local)?;
+    if can_remember {
+        let remembered = remote && local && {
+            let secret =
+                wire.get_ref()
+                    .1
+                    .export_keying_material([0; 32], pairing::TRUST_SECRET, None)?;
+            approval.shared.3.save(Peer { name, secret }).is_ok()
+        };
+        wire.write_u8(u8::from(remembered)).await?;
+    }
+    issue_token(&mut wire, approval).await
+}
+
+async fn reconnect_remembered(
+    mut wire: PeerStream,
+    approval: &ServerApproval,
+    secret: Token,
+) -> Result<()> {
+    let tls = wire.get_ref().1;
+    let receiver = tls.export_keying_material([0; 32], pairing::TRUST_RECEIVER, Some(&secret))?;
+    let sender = tls.export_keying_material([0; 32], pairing::TRUST_SENDER, Some(&secret))?;
+    wire.write_u8(REMEMBER).await?;
+    wire.write_all(&receiver).await?;
+    wire.flush().await?;
+    verify_proof(&mut wire, sender).await?;
+    issue_token(&mut wire, approval).await
+}
+
+async fn verify_proof(wire: &mut (impl AsyncRead + Unpin), expected: Token) -> Result<()> {
+    let mut proof = [0; 32];
+    wire.read_exact(&mut proof).await?;
+    ensure!(
+        pairing::authenticate(proof, expected),
+        "This PC could not prove its remembered identity. Forget it to pair again."
+    );
+    Ok(())
+}
+
+async fn issue_token(wire: &mut PeerStream, approval: &ServerApproval) -> Result<()> {
     let mut token = [0; 32];
     getrandom::fill(&mut token).map_err(|err| anyhow::anyhow!("{err}"))?;
     *approval.issued.lock().unwrap() = Some(token);
@@ -262,9 +343,18 @@ async fn request_invite(
 ) -> Result<Invite> {
     let pin = advertisement.pin;
     let mut config = pairing::client(pin)?;
-    config.alpn_protocols = vec![pairing::APPROVAL_ALPN.to_vec()];
+    config.alpn_protocols = vec![
+        pairing::TRUST_ALPN.to_vec(),
+        pairing::APPROVAL_ALPN.to_vec(),
+    ];
     let connector = TlsConnector::from(Arc::new(config));
-    let mut wire = timeout(HANDSHAKE, async {
+    let remembered = shared
+        .3
+        .load()
+        .ok()
+        .flatten()
+        .filter(|peer| peer.name == advertisement.name);
+    let (mut wire, mode, can_remember) = timeout(HANDSHAKE, async {
         let stream = TcpStream::connect(address).await?;
         stream.set_nodelay(true)?;
         let mut wire = connector
@@ -273,13 +363,37 @@ async fn request_invite(
         let name = discovery::computer_name();
         wire.write_u8(name.len() as u8).await?;
         wire.write_all(name.as_bytes()).await?;
+        let can_remember = wire.get_ref().1.alpn_protocol() == Some(pairing::TRUST_ALPN);
+        if can_remember {
+            wire.write_u8(u8::from(remembered.is_some())).await?;
+        }
         wire.flush().await?;
-        ensure!(wire.read_u8().await? == 1, "Pairing unavailable");
-        Ok::<_, anyhow::Error>(wire)
+        let mode = wire.read_u8().await?;
+        ensure!(
+            mode == APPROVE || (can_remember && mode == REMEMBER && remembered.is_some()),
+            "Pairing unavailable"
+        );
+        Ok::<_, anyhow::Error>((wire, mode, can_remember))
     })
     .await
     .context("The other PC did not answer the pairing request")?
     .context("Pairing unavailable. Check that the receiver is ready and try again.")?;
+    if mode == REMEMBER {
+        let secret = remembered.context("This PC is not remembered")?.secret;
+        return timeout(HANDSHAKE, async {
+            let tls = wire.get_ref().1;
+            let receiver =
+                tls.export_keying_material([0; 32], pairing::TRUST_RECEIVER, Some(&secret))?;
+            let sender =
+                tls.export_keying_material([0; 32], pairing::TRUST_SENDER, Some(&secret))?;
+            verify_proof(&mut wire, receiver).await?;
+            wire.write_all(&sender).await?;
+            wire.flush().await?;
+            Ok(Invite::from_approval(pin, read_token(&mut wire).await?))
+        })
+        .await
+        .context("Remembered PC did not respond")?;
+    }
     let comparison =
         wire.get_ref()
             .1
@@ -287,25 +401,58 @@ async fn request_invite(
     let token = timeout(APPROVAL_TIMEOUT, async {
         let (_prompt, decision) = shared.prompt(
             generation,
-            advertisement.name,
+            advertisement.name.clone(),
             pairing::confirmation(comparison),
+            can_remember,
         )?;
         let accepted = tokio::select! {
             result = decision => result?,
             _ = wire.read_u8() => bail!("The other PC closed the pairing request."),
         };
-        ensure!(accepted, "Pairing declined");
-        wire.write_u8(1).await?;
+        ensure!(accepted.accepted, "Pairing declined");
+        wire.write_u8(if accepted.remember { REMEMBER } else { APPROVE })
+            .await?;
         wire.flush().await?;
-        let mut token = [0; 32];
-        wire.read_exact(&mut token)
-            .await
-            .context("Pairing declined or expired on the other PC.")?;
+        let stored = if can_remember {
+            let stored = wire
+                .read_u8()
+                .await
+                .context("Pairing declined or expired on the other PC.")?;
+            ensure!(
+                stored <= 1 && (stored == 0 || accepted.remember),
+                "Invalid device trust response"
+            );
+            stored == 1
+        } else {
+            false
+        };
+        let token = read_token(&mut wire).await?;
+        if stored {
+            let secret =
+                wire.get_ref()
+                    .1
+                    .export_keying_material([0; 32], pairing::TRUST_SECRET, None)?;
+            shared
+                .3
+                .save(Peer {
+                    name: advertisement.name,
+                    secret,
+                })
+                .context("Could not remember the other PC")?;
+        }
         Ok::<_, anyhow::Error>(token)
     })
     .await
     .context("Pairing request expired")??;
     Ok(Invite::from_approval(pin, token))
+}
+
+async fn read_token(wire: &mut (impl AsyncRead + Unpin)) -> Result<Token> {
+    let mut token = [0; 32];
+    wire.read_exact(&mut token)
+        .await
+        .context("Pairing declined or expired on the other PC.")?;
+    Ok(token)
 }
 
 async fn receive(
@@ -376,7 +523,7 @@ async fn connect_channels(
     connector: &TlsConnector,
 ) -> Result<(ClientStream, Option<ClientStream>)> {
     let mut wire = timeout(HANDSHAKE, connect(address, invite, connector)).await??;
-    if wire.get_ref().1.alpn_protocol() != Some(clipboard::ALPN) {
+    if !has_clipboard(wire.get_ref().1.alpn_protocol()) {
         return Ok((wire, None));
     }
     let mut channel_key = [0; 32];
@@ -405,21 +552,35 @@ pub async fn send(
     if share_clipboard {
         config.alpn_protocols.insert(0, clipboard::ALPN.to_vec());
     }
+    config
+        .alpn_protocols
+        .insert(0, clipboard::LIVE_ALPN.to_vec());
     let connector = TlsConnector::from(Arc::new(config));
     loop {
         let result = match connect_channels((ip, TCP_PORT).into(), invite, &connector).await {
             Ok((wire, side)) => {
+                let live = wire.get_ref().1.alpn_protocol() == Some(clipboard::LIVE_ALPN);
+                let preference = shared.clipboard_preference();
+                let side = side.filter(|_| live || *preference.borrow());
                 let (capture, events) = Capture::start(edges.0, edges.1).await?;
                 shared.update(generation, |status| {
                     status.phase = "connected";
                     status.peer = Some(ip.to_string());
                     status.message = None;
-                    status.clipboard_active = side.is_some();
+                    status.clipboard_live = live && side.is_some();
+                    status.clipboard_active = !live && side.is_some();
                 });
                 let result = clipboard::alongside(
                     drive(wire, &capture, events, &shared, generation),
                     side,
-                    || shared.update(generation, |status| status.clipboard_active = false),
+                    live.then_some(preference),
+                    |active| shared.update(generation, |status| status.clipboard_active = active),
+                    || {
+                        shared.update(generation, |status| {
+                            status.clipboard_active = false;
+                            status.clipboard_live = false;
+                        })
+                    },
                 )
                 .await;
                 drop(capture);
@@ -432,6 +593,7 @@ pub async fn send(
             status.forwarding = false;
             status.latency_ms = None;
             status.clipboard_active = false;
+            status.clipboard_live = false;
             status.peer = None;
             status.message = result.err().map(|err| err.to_string());
         });
@@ -495,6 +657,100 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn remembered_pc_reconnects_after_restart_and_rejects_a_different_secret() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let primary_path = temp.path().join("primary.bin");
+        let secondary_path = temp.path().join("secondary.bin");
+        let name = discovery::computer_name();
+        let primary = Shared::with_trust(primary_path.clone());
+        let secondary = Arc::new(Shared::with_trust(secondary_path.clone()));
+        async fn serve(
+            primary: &Shared,
+            secondary: Arc<Shared>,
+            name: &str,
+            approve: bool,
+        ) -> Result<()> {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+            let address = listener.local_addr()?;
+            let (mut config, code, manual) = pairing::create()?;
+            config.alpn_protocols.push(pairing::TRUST_ALPN.to_vec());
+            let pin = Invite::parse(&code)?.pin();
+            let acceptor = TlsAcceptor::from(Arc::new(config));
+            let approval = Arc::new(ServerApproval {
+                shared: Arc::clone(&secondary),
+                generation: 0,
+                issued: Mutex::new(None),
+            });
+            let client = async {
+                let invite = request_invite(
+                    primary,
+                    0,
+                    address,
+                    discovery::Advertisement {
+                        name: name.to_owned(),
+                        pin,
+                    },
+                )
+                .await?;
+                let connector = TlsConnector::from(Arc::new(invite.client()?));
+                connect(address, invite, &connector).await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let server = async {
+                accept_connections(&listener, &acceptor, manual, Some(&approval)).await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let answer = async {
+                if approve {
+                    loop {
+                        if let (Some(local), Some(remote)) =
+                            (primary.snapshot().approval, secondary.snapshot().approval)
+                        {
+                            assert!(local.can_remember && remote.can_remember);
+                            assert_eq!(local.comparison, remote.comparison);
+                            primary
+                                .decide(local.id, true, true)
+                                .map_err(anyhow::Error::msg)?;
+                            secondary
+                                .decide(remote.id, true, true)
+                                .map_err(anyhow::Error::msg)?;
+                            break;
+                        }
+                        sleep(Duration::from_millis(5)).await;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            timeout(HANDSHAKE, async {
+                tokio::try_join!(server, client, answer)
+            })
+            .await??;
+            assert!(primary.snapshot().approval.is_none());
+            Ok(())
+        }
+        serve(&primary, secondary, &name, true).await?;
+        let primary = Shared::with_trust(primary_path);
+        let secondary = Arc::new(Shared::with_trust(secondary_path));
+        assert!(primary.3.load()?.is_some());
+        assert!(secondary.3.load()?.is_some());
+        serve(&primary, Arc::clone(&secondary), &name, false).await?;
+
+        let unrelated = Shared::with_trust(temp.path().join("unrelated.bin"));
+        unrelated.3.save(Peer {
+            name: name.clone(),
+            secret: [91; 32],
+        })?;
+        let error = serve(&unrelated, secondary, &name, false)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("remembered identity"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn discovered_pairing_issues_a_token_only_after_both_pcs_accept() -> Result<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
@@ -532,10 +788,12 @@ mod tests {
                     };
                     assert_eq!(local.comparison, remote.comparison);
                     assert_eq!(local.comparison.len(), 8);
-                    primary.decide(local.id, true).map_err(anyhow::Error::msg)?;
+                    primary
+                        .decide(local.id, true, false)
+                        .map_err(anyhow::Error::msg)?;
                     assert!(approval.issued.lock().unwrap().is_none());
                     secondary
-                        .decide(remote.id, accepted)
+                        .decide(remote.id, accepted, false)
                         .map_err(anyhow::Error::msg)?;
                     Ok::<_, anyhow::Error>(())
                 };
